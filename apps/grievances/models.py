@@ -16,9 +16,9 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.core.validators import MinValueValidator
 from django.db import models
-
 from apps.core.models import SoftDeleteModel, TenantOwnedModel, TimeStampedModel
 from apps.grievances import enums
+from apps.grievances.references import ReferenceCounter  # noqa: F401  (model registration)
 
 EMPLOYEE = settings.GRIEVANCES_EMPLOYEE_MODEL
 DEPARTMENT = settings.GRIEVANCES_DEPARTMENT_MODEL
@@ -64,8 +64,11 @@ class Complaint(TenantOwnedModel, TimeStampedModel, SoftDeleteModel):
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     reference = models.CharField(
         max_length=32,
-        unique=True,
-        help_text="Human-readable case reference, e.g. CMP-2026-00184.",
+        db_index=True,
+        help_text=(
+            "Human-readable case reference, e.g. CMP-2026-00184. Unique within "
+            "an organisation, not globally -- each tenant numbers from 1."
+        ),
     )
 
     source = models.CharField(max_length=32, choices=enums.ComplaintSource.choices)
@@ -179,6 +182,9 @@ class Complaint(TenantOwnedModel, TimeStampedModel, SoftDeleteModel):
             models.Index(fields=("respondent", "state")),
         ]
         constraints = [
+            models.UniqueConstraint(
+                fields=("organisation", "reference"), name="uniq_reference_per_org"
+            ),
             # An EMPLOYEE complaint must name a respondent; a GENERAL one must not.
             models.CheckConstraint(
                 condition=(

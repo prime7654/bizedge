@@ -69,8 +69,8 @@ line-manager visibility of a complaint against themselves.
 ## Build progress
 
 - [x] 1 — Schema, migrations, admin, tenancy, `ComplaintEvent`
-- [ ] 2 — `ComplaintAccessPolicy` + object-level permissions + orphan fallback
-- [ ] 3 — Intake: four variants, conditional validation, intake override
+- [x] 2 — `ComplaintAccessPolicy` + object-level permissions + orphan fallback
+- [x] 3 — Intake: four variants, conditional validation, intake override
 - [ ] 4 — Lists, filters, detail views, metadata + summary endpoints
 - [ ] 5 — State machine, triage, due date, respondent visibility
 - [ ] 6 — Investigation
@@ -82,3 +82,28 @@ line-manager visibility of a complaint against themselves.
 - [ ] 12 — LM-only triage — deferred, awaiting Product
 
 Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
+
+## Endpoints so far
+
+| Method | Path | Notes |
+|---|---|---|
+| `POST` | `/api/v1/complaints/` | File a complaint — all four routes |
+| `GET` | `/api/v1/complaints/` | List, filtered by the access policy |
+| `GET` | `/api/v1/complaints/{id}/` | Detail; shape depends on access level |
+| `POST` | `/api/v1/complaints/{id}/attachments/` | Attach evidence |
+
+Browsable schema at `/api/docs/` — hand that URL to the frontend team so they
+can mock against it while the rest lands.
+
+## Tests
+
+```bash
+docker compose exec web pytest
+docker compose exec web python scripts/verify_constraints.py
+```
+
+The access tests in `apps/grievances/tests/test_access.py` are the ones that
+matter. A bug there does not raise — it quietly shows a grievance to someone who
+should never have seen it. `test_object_and_queryset_rules_never_disagree`
+exists because `can_view()` and `visible_queryset()` are separate
+implementations of one rule, and drift between them is a leak.
