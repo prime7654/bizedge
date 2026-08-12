@@ -135,3 +135,35 @@ matter. A bug there does not raise — it quietly shows a grievance to someone w
 should never have seen it. `test_object_and_queryset_rules_never_disagree`
 exists because `can_view()` and `visible_queryset()` are separate
 implementations of one rule, and drift between them is a leak.
+
+## Code standards
+
+This project follows the `robust-code` practice. In short: handle the input
+nobody pictured, fail loudly at the boundary, and never swallow an error you
+cannot act on.
+
+The specifics that matter here:
+
+- **Validate at the edge.** Anything arriving from a client — request body,
+  header, filename, query param — is validated before it reaches the database.
+  Past that boundary, code can trust its inputs.
+- **Catch narrow.** One deliberate broad handler exists, in
+  `notifications.notify`, and it is documented: a failed notification must
+  never roll back the transaction that triggered it.
+- **Bound external input.** Search terms, user agents and filenames are
+  length-capped. Uploads are checked on size, MIME type and extension.
+- **Services accept loose input.** They are called from the API, the admin,
+  management commands and imports, so they coerce dates rather than assuming
+  DRF already parsed them.
+- **Test the failure, not the happy path.** Roughly one test per handled
+  failure mode. `test_hardening.py` covers hostile input specifically.
+- **Mutation-test the guards.** After a suite goes green, break each guard and
+  confirm a test fails. Two real bugs in this codebase were found that way and
+  would not have been found otherwise.
+
+### A caveat about SQLite
+
+The suite runs on Postgres in the container. Do not switch it to SQLite for
+speed: SQLite silently accepts values Postgres rejects, and at least one
+production-breaking bug here (an unvalidated `X-Forwarded-For` reaching an
+`inet` column) was invisible under SQLite.

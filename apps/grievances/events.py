@@ -9,9 +9,13 @@ Rows are append-only. Nothing in the codebase should ever update or delete a
 """
 from __future__ import annotations
 
+import ipaddress
+import logging
 from typing import Any
 
 from apps.grievances.models import Complaint, ComplaintEvent
+
+logger = logging.getLogger(__name__)
 
 
 def record_event(
@@ -49,12 +53,38 @@ def record_event(
 
 
 def _client_ip(request) -> str | None:
-    """Best-effort client IP.
+    """Best-effort client IP, validated before it goes anywhere near the DB.
 
-    X-Forwarded-For is trusted only as far as the deployment's proxy config
-    allows; treat the result as indicative, not authoritative.
+    X-Forwarded-For is attacker-controlled: it is whatever the client chose to
+    send. ``ComplaintEvent.ip_address`` is a ``GenericIPAddressField``, which
+    maps to the Postgres ``inet`` type and *rejects* anything that is not an
+    address. Storing the header unvalidated therefore turns a junk header into
+    a 500 on every endpoint that writes an audit row -- which is all of the
+    interesting ones.
+
+    So: parse it, and fall back to None rather than raising. An audit row with
+    no IP is a small loss; a filing endpoint that anyone can break with a
+    header is not.
+
+    The value remains indicative rather than authoritative -- it is only as
+    trustworthy as the deployment's proxy configuration.
     """
+    candidates = []
+
     forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
     if forwarded:
-        return forwarded.split(",")[0].strip() or None
-    return request.META.get("REMOTE_ADDR") or None
+        # Left-most entry is the original client, per convention.
+        candidates.append(forwarded.split(",")[0])
+    candidates.append(request.META.get("REMOTE_ADDR", ""))
+
+    for candidate in candidates:
+        candidate = (candidate or "").strip()
+        if not candidate:
+            continue
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            logger.debug("Discarding unparseable client IP: %r", candidate[:64])
+            continue
+
+    return None

@@ -90,6 +90,9 @@ class ComplaintFilter(filters.FilterSet):
         value = (value or "").strip()
         if not value:
             return queryset
+        # Bound the term. An unbounded icontains over a multi-megabyte string
+        # is a cheap way to make the database work very hard.
+        value = value[:200]
         return queryset.filter(
             Q(reference__icontains=value)
             | Q(complainant__full_name__icontains=value)

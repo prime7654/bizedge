@@ -11,6 +11,8 @@ Two rules govern everything in this module:
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 from django.db.models import Count, Q
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
@@ -186,21 +188,33 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
 
         from django.conf import settings
 
+        if upload.size == 0:
+            raise ValidationError({"file": _("That file is empty.")})
         if upload.size > settings.GRIEVANCES_MAX_ATTACHMENT_BYTES:
             limit_mb = settings.GRIEVANCES_MAX_ATTACHMENT_BYTES // (1024 * 1024)
             raise ValidationError(
                 {"file": _("Files must be %(limit)s MB or smaller.") % {"limit": limit_mb}}
             )
+
+        # content_type is a client-supplied header and trivially spoofed, so
+        # the extension is checked as well. Neither is proof of what is inside
+        # the file -- real content sniffing belongs with the AV scan, which is
+        # not built yet.
         if upload.content_type not in settings.GRIEVANCES_ALLOWED_ATTACHMENT_TYPES:
+            raise ValidationError({"file": _("That file type is not accepted.")})
+
+        safe_name = Path(upload.name or "").name  # strips any ../ path components
+        suffix = Path(safe_name).suffix.lower()
+        if suffix not in settings.GRIEVANCES_ALLOWED_ATTACHMENT_EXTENSIONS:
             raise ValidationError(
-                {"file": _("That file type is not accepted.")}
+                {"file": _("Files ending %(ext)s are not accepted.") % {"ext": suffix or "?"}}
             )
 
         with transaction.atomic():
             attachment = Attachment.objects.create(
                 owner=complaint,
                 file=upload,
-                original_filename=upload.name[:512],
+                original_filename=safe_name[:512],
                 content_type_header=upload.content_type or "",
                 size_bytes=upload.size,
                 uploaded_by=employee,

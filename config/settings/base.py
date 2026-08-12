@@ -110,6 +110,12 @@ GRIEVANCES_ORGANISATION_MODEL = env("GRIEVANCES_ORGANISATION_MODEL", default="co
 
 # Attachment limits — grievance evidence is sensitive, keep storage private.
 GRIEVANCES_MAX_ATTACHMENT_BYTES = env.int("GRIEVANCES_MAX_ATTACHMENT_BYTES", default=25 * 1024 * 1024)
+# Checked alongside the MIME type. The browser-supplied content_type header is
+# not evidence of anything -- a renamed executable will happily claim to be a
+# PDF -- so both must line up.
+GRIEVANCES_ALLOWED_ATTACHMENT_EXTENSIONS = [
+    ".pdf", ".jpg", ".jpeg", ".png", ".doc", ".docx",
+]
 GRIEVANCES_ALLOWED_ATTACHMENT_TYPES = [
     "application/pdf",
     "image/jpeg",
