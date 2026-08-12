@@ -10,11 +10,17 @@ from __future__ import annotations
 
 from django.conf import settings
 from django.db.models import Q
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 from apps.directory.models import Department, Employee
 from apps.grievances import enums
 from apps.grievances.access import AccessLevel, ComplaintAccessPolicy
-from apps.grievances.models import Attachment, Complaint, ComplaintWitness
+from apps.grievances.models import (
+    Attachment,
+    Complaint,
+    ComplaintEvent,
+    ComplaintWitness,
+)
 
 
 class EmployeeBriefSerializer(serializers.ModelSerializer):
@@ -254,13 +260,19 @@ class ComplaintListSerializer(serializers.ModelSerializer):
     def _viewer(self):
         return self.context.get("employee")
 
+    @extend_schema_field(EmployeeBriefSerializer(allow_null=True))
     def get_respondent(self, obj):
         if obj.respondent is None:
             return None
         return EmployeeBriefSerializer(obj.respondent).data
 
+    @extend_schema_field(EmployeeBriefSerializer(allow_null=True))
     def get_complainant(self, obj):
-        """Masked from the respondent unless HR has released the identity."""
+        """Masked from the respondent unless HR has released the identity.
+
+        Nullable in the schema on purpose -- clients must handle a null
+        complainant, both for masking and for company-filed complaints.
+        """
         if obj.complainant is None:
             return None
         if ComplaintAccessPolicy.should_mask_complainant(obj, self._viewer()):
@@ -309,3 +321,18 @@ def serializer_for_access(level: AccessLevel):
     if level is AccessLevel.RESTRICTED:
         return ComplaintRestrictedSerializer
     return ComplaintDetailSerializer
+
+
+class ComplaintEventSerializer(serializers.ModelSerializer):
+    """One row of the case timeline."""
+
+    actor = EmployeeBriefSerializer(read_only=True)
+    verb_display = serializers.CharField(source="get_verb_display", read_only=True)
+
+    class Meta:
+        model = ComplaintEvent
+        fields = (
+            "id", "verb", "verb_display", "actor",
+            "from_state", "to_state", "payload", "occurred_at",
+        )
+        read_only_fields = fields

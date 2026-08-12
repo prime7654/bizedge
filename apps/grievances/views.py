@@ -11,10 +11,12 @@ Two rules govern everything in this module:
 """
 from __future__ import annotations
 
+from django.db.models import Count, Q
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema
 from rest_framework import status, viewsets
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
@@ -23,10 +25,13 @@ from rest_framework.response import Response
 from apps.grievances import enums
 from apps.grievances.access import AccessLevel, ComplaintAccessPolicy, employee_for
 from apps.grievances.events import record_event
+from apps.grievances import metadata as metadata_module
+from apps.grievances.filters import ComplaintFilter
 from apps.grievances.models import Attachment, Complaint
 from apps.grievances.permissions import CanViewComplaint, IsEmployee
 from apps.grievances.serializers import (
     AttachmentSerializer,
+    ComplaintEventSerializer,
     ComplaintCreateSerializer,
     ComplaintDetailSerializer,
     ComplaintListSerializer,
@@ -45,6 +50,18 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
 
     permission_classes = [IsEmployee, CanViewComplaint]
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    filterset_class = ComplaintFilter
+    ordering_fields = ["created_at", "due_date", "state", "reference"]
+    ordering = ["-created_at"]
+
+    def initial(self, request, *args, **kwargs):
+        """Resolve the employee once and hang it off the request.
+
+        The filterset needs it and only receives the request, so this avoids
+        every filter method re-resolving the profile.
+        """
+        super().initial(request, *args, **kwargs)
+        request.grievance_employee = employee_for(request.user)
 
     def get_queryset(self):
         """Never return an unfiltered queryset. See the module docstring."""
@@ -193,3 +210,97 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
         return Response(
             AttachmentSerializer(attachment).data, status=status.HTTP_201_CREATED
         )
+
+    @extend_schema(
+        responses={200: dict},
+        description=(
+            "Every option set and conditional form rule in one call. Fetch on "
+            "load rather than hardcoding dropdowns client-side."
+        ),
+    )
+    @action(
+        detail=False,
+        methods=["get"],
+        permission_classes=[IsAuthenticated],
+        filter_backends=[],
+        pagination_class=None,
+    )
+    def metadata(self, request):
+        return Response(metadata_module.complaint_metadata())
+
+    @extend_schema(
+        responses={200: dict},
+        description="Counts for the list tabs and status filters.",
+    )
+    @action(detail=False, methods=["get"], filter_backends=[], pagination_class=None)
+    def summary(self, request):
+        """Tab and status counts, computed over what the caller may see.
+
+        Deliberately reuses ``get_queryset()`` so the counts can never disagree
+        with the lists they label -- a badge showing 5 above a list of 3 is a
+        support ticket.
+        """
+        employee = employee_for(request.user)
+        visible = self.get_queryset()
+
+        totals = visible.aggregate(
+            reported_by_me=Count(
+                "pk",
+                filter=Q(complainant_id=employee.pk) | Q(filed_by_id=employee.pk),
+                distinct=True,
+            ),
+            against_me=Count(
+                "pk", filter=Q(respondent_id=employee.pk), distinct=True
+            ),
+            by_employees=Count(
+                "pk", filter=Q(source=enums.ComplaintSource.SELF), distinct=True
+            ),
+            by_hr=Count(
+                "pk",
+                filter=Q(
+                    source__in=[
+                        enums.ComplaintSource.HR_FOR_EMPLOYEE,
+                        enums.ComplaintSource.HR_FOR_COMPANY,
+                    ]
+                ),
+                distinct=True,
+            ),
+        )
+
+        by_state = {
+            row["state"]: row["n"]
+            for row in visible.values("state").annotate(n=Count("pk"))
+        }
+        by_status: dict[str, int] = {}
+        for status_label, states in enums.STATUS_TO_STATES.items():
+            by_status[status_label] = sum(by_state.get(st, 0) for st in states)
+
+        return Response(
+            {
+                "total": visible.count(),
+                "tabs": totals,
+                "by_state": by_state,
+                "by_status": by_status,
+            }
+        )
+
+    @extend_schema(
+        responses={200: ComplaintEventSerializer(many=True)},
+        description="Case history. Requires full access to the complaint.",
+    )
+    @action(detail=True, methods=["get"], filter_backends=[], pagination_class=None)
+    def timeline(self, request, pk=None):
+        """The audit trail for one complaint.
+
+        Restricted to people with FULL access. A respondent seeing the timeline
+        would learn who was invited, who gave evidence and when -- far more
+        than the allegation itself.
+        """
+        complaint = self.get_object()
+        employee = employee_for(request.user)
+
+        if ComplaintAccessPolicy.access_level(complaint, employee) is not AccessLevel.FULL:
+            raise PermissionDenied(_("You cannot view the history of this complaint."))
+
+        events = complaint.events.select_related("actor").order_by("-occurred_at")
+        return Response(ComplaintEventSerializer(events, many=True).data)

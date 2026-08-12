@@ -71,7 +71,7 @@ line-manager visibility of a complaint against themselves.
 - [x] 1 — Schema, migrations, admin, tenancy, `ComplaintEvent`
 - [x] 2 — `ComplaintAccessPolicy` + object-level permissions + orphan fallback
 - [x] 3 — Intake: four variants, conditional validation, intake override
-- [ ] 4 — Lists, filters, detail views, metadata + summary endpoints
+- [x] 4 — Lists, filters, detail views, metadata + summary endpoints
 - [ ] 5 — State machine, triage, due date, respondent visibility
 - [ ] 6 — Investigation
 - [ ] 7 — Decision & resolution
@@ -91,6 +91,20 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `GET` | `/api/v1/complaints/` | List, filtered by the access policy |
 | `GET` | `/api/v1/complaints/{id}/` | Detail; shape depends on access level |
 | `POST` | `/api/v1/complaints/{id}/attachments/` | Attach evidence |
+| `GET` | `/api/v1/complaints/metadata/` | Every dropdown and form rule, in one call |
+| `GET` | `/api/v1/complaints/summary/` | Tab and status counts |
+| `GET` | `/api/v1/complaints/{id}/timeline/` | Case history — full access only |
+| `GET` | `/api/v1/employees/` | Employee picker (`?q=`, `?department=`, `?exclude_self=`) |
+| `GET` | `/api/v1/departments/` | Department picker |
+| `GET` | `/api/v1/trainings/` | Training catalogue for PIPs |
+
+**Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
+`source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,
+`state`, `q`, `date_from`, `date_to`, `ordering`.
+
+`status` and `stage` are derived from `state`, so those filters map a display
+value back to the states it covers. An unrecognised value returns nothing
+rather than everything — filters fail closed.
 
 Browsable schema at `/api/docs/` — hand that URL to the frontend team so they
 can mock against it while the rest lands.

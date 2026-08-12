@@ -140,6 +140,16 @@ SPECTACULAR_SETTINGS = {
     "DESCRIPTION": "Complaints, investigations and resolutions.",
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
+    # `visibility` and `visibility_requested` share one choice set. Without an
+    # override, generated clients get two identical enums with different names.
+    # Several fields share one choice set -- `visibility`/`visibility_requested`
+    # and `state`/`from_state`/`to_state`. Without these overrides, generated
+    # clients get duplicate enums under different names.
+    "ENUM_NAME_OVERRIDES": {
+        "VisibilityEnum": "apps.grievances.enums.Visibility.choices",
+        "ComplaintStateEnum": "apps.grievances.enums.ComplaintState.choices",
+    },
+    "COMPONENT_SPLIT_REQUEST": True,
 }
 
 CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")

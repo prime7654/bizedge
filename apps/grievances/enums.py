@@ -79,6 +79,24 @@ STATE_TO_STAGE = {
     ComplaintState.WITHDRAWN: "N/A",
 }
 
+#: Reverse maps for filtering. The UI filters on Status and Stage, which are
+#: derived values -- these translate a filter choice back to the states it
+#: covers. Derived from STATE_TO_STATUS / STATE_TO_STAGE so they cannot drift.
+STATUS_TO_STATES = {
+    status: [s for s, v in STATE_TO_STATUS.items() if v == status]
+    for status in dict.fromkeys(STATE_TO_STATUS.values())
+}
+
+STAGE_TO_STATES = {
+    stage: [s for s, v in STATE_TO_STAGE.items() if v == stage]
+    for stage in dict.fromkeys(STATE_TO_STAGE.values())
+}
+
+#: HR console tabs. "By Employees" is everything an employee filed themselves;
+#: "By HR" is everything HR filed, on behalf of a person or the company.
+SOURCE_TAB_EMPLOYEE = "employee"
+SOURCE_TAB_HR = "hr"
+
 #: States in which a complaint may still be soft-deleted or withdrawn.
 #: Spec v4 section 7: both close the moment an investigator is appointed.
 PRE_INVESTIGATION_STATES = frozenset({ComplaintState.SUBMITTED})
