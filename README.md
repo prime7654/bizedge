@@ -106,8 +106,20 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 value back to the states it covers. An unrecognised value returns nothing
 rather than everything — filters fail closed.
 
-Browsable schema at `/api/docs/` — hand that URL to the frontend team so they
-can mock against it while the rest lands.
+Live docs at `/api/docs/` while the server is running (localhost only).
+
+To share with the frontend team, run `make docs`. That regenerates:
+
+- `docs/api/schema.yml` — the contract; committed, so API changes show in diffs
+- `docs/api/index.html` — self-contained, opens in any browser, nothing to install
+
+Send them `index.html` and `docs/api/API-NOTES.md` together. The notes cover the
+behaviour the schema cannot express — nullable `complainant`, three-way
+visibility, derived `status`/`stage`, and the two different detail shapes.
+
+**Re-run `make docs` after any change to serializers, views or routes.** A stale
+schema is worse than none, because people trust it. `make docs-check` fails if
+the committed copy has drifted.
 
 ## Tests
 
