@@ -7,11 +7,22 @@ makes the audit trail trustworthy -- there is no path that changes a complaint
 without recording it.
 """
 from __future__ import annotations
+
+from datetime import date
+
 from django.db import transaction
-from apps.grievances import enums, notifications
+from django.utils import timezone
+from django.utils.dateparse import parse_date
+
+from apps.grievances import enums, notifications, transitions
 from apps.grievances.access import resolve_effective_visibility
 from apps.grievances.events import record_event
-from apps.grievances.models import Complaint, ComplaintWitness
+from apps.grievances.models import (
+    Complaint,
+    ComplaintWitness,
+    Investigation,
+    InvestigationCollaborator,
+)
 from apps.grievances.references import next_reference
 
 
@@ -141,3 +152,193 @@ def _initial_recipients(complaint: Complaint) -> list:
             recipients.append(manager)
 
     return recipients
+
+
+# ---------------------------------------------------------------------------
+# Triage
+# ---------------------------------------------------------------------------
+
+
+class ConflictOfInterest(ServiceError):
+    """The actor is too close to the case to take this action."""
+
+
+def _coerce_date(value) -> date | None:
+    """Accept a date or an ISO string.
+
+    Services are called from the API, the admin, management commands and data
+    imports. Only the first of those guarantees a parsed date, so normalising
+    here is cheaper than trusting every caller.
+    """
+    if value is None or isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        parsed = parse_date(value.strip())
+        if parsed is None:
+            raise ServiceError(f"{value!r} is not a valid date (expected YYYY-MM-DD).")
+        return parsed
+    raise ServiceError(f"Unsupported date value: {value!r}")
+
+
+def _assert_no_conflict(complaint: Complaint, actor, lead) -> None:
+    """Refuse triage by, or appointment of, anyone party to the complaint.
+
+    Being HR does not make you neutral about a complaint you are named in.
+    Nothing in the product prevents an HR user opening a case about
+    themselves, so it is prevented here.
+
+    Deliberately covers the actor *and* the proposed lead: appointing the
+    respondent as their own investigator is the same problem wearing a
+    different hat.
+    """
+    parties = {
+        pk
+        for pk in (complaint.complainant_id, complaint.respondent_id)
+        if pk is not None
+    }
+
+    if actor is not None and actor.pk in parties:
+        raise ConflictOfInterest(
+            "You are named in this complaint and cannot triage it. "
+            "Ask another HR colleague to take it."
+        )
+    if lead is not None and lead.pk in parties:
+        raise ConflictOfInterest(
+            "That person is named in this complaint and cannot investigate it."
+        )
+
+
+@transaction.atomic
+def appoint_investigator(
+    *,
+    complaint: Complaint,
+    actor,
+    lead,
+    due_date: date | None = None,
+    request=None,
+) -> Investigation:
+    """Open a case by appointing an investigation lead.
+
+    The pivotal moment in the lifecycle. Several things change at once, and
+    they must all happen together or not at all:
+
+    * the complaint moves to UNDER_INVESTIGATION
+    * ``due_date`` is set -- HR sets it here, per B3, and it is null before
+    * the respondent can see the case for the first time (spec v4 A1)
+    * the deletion window closes permanently (Q5)
+    * collaborators are seeded from the complainant and named witnesses
+    * the lead is notified with a link straight to the case
+
+    Per Q4 an HR user may appoint themselves, which is how a minor complaint is
+    handled without pulling in a separate investigator. Per B4 there is no
+    acceptance step -- the appointment takes effect immediately.
+
+    Idempotent by state: a second call on an already-open complaint raises
+    rather than creating a second round. That matters because this sits behind
+    a slow modal and is a natural double-click.
+    """
+    # Lock first, then check. Reading the state before locking means two
+    # concurrent callers can both see SUBMITTED and both proceed.
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+    transition = transitions.check(complaint, "appoint_investigator")
+
+    if lead is None:
+        raise ServiceError("Select who will investigate this complaint.")
+    if lead.organisation_id != complaint.organisation_id:
+        raise ServiceError("That person is not in this organisation.")
+
+    _assert_no_conflict(complaint, actor, lead)
+
+    due_date = _coerce_date(due_date)
+    previous_state = complaint.state
+    investigation = Investigation.objects.create(
+        complaint=complaint,
+        round=1,
+        lead=lead,
+        lead_is_hr=bool(getattr(lead, "is_hr", False)),
+        invited_by=actor,
+        invited_at=timezone.now(),
+        start_date=timezone.localdate(),
+        state=enums.InvestigationState.IN_PROGRESS,
+    )
+
+    complaint.state = transition.target
+    complaint.due_date = due_date
+    complaint.updated_by = actor
+    complaint.save(update_fields=["state", "due_date", "updated_by", "updated_at"])
+
+    _seed_collaborators(investigation, complaint, invited_by=actor)
+
+    record_event(
+        complaint,
+        verb=enums.EventVerb.INVESTIGATOR_APPOINTED,
+        actor=actor,
+        from_state=previous_state,
+        to_state=complaint.state,
+        payload={
+            "lead_id": str(lead.pk),
+            "lead_name": lead.full_name,
+            "self_assigned": actor is not None and actor.pk == lead.pk,
+            "due_date": due_date.isoformat() if due_date else None,
+        },
+        request=request,
+    )
+
+    notifications.notify(
+        notifications.INVESTIGATOR_APPOINTED,
+        complaint,
+        [lead],
+        reference=complaint.reference,
+        due_date=due_date,
+    )
+
+    return investigation
+
+
+def _seed_collaborators(investigation, complaint, *, invited_by) -> None:
+    """Pre-populate the collaborator list.
+
+    The complainant and any named witnesses are on the case from the start --
+    the lead should not have to re-add people the complaint already names.
+
+    The respondent is deliberately *not* seeded. Whether to involve them, and
+    when, is the lead's judgement call, not an automatic consequence of the
+    case opening.
+    """
+    seeded: set = set()
+
+    if complaint.complainant_id:
+        InvestigationCollaborator.objects.create(
+            investigation=investigation,
+            employee_id=complaint.complainant_id,
+            role=enums.CollaboratorRole.COMPLAINANT,
+            invited_by=invited_by,
+            invited_at=timezone.now(),
+            status=enums.CollaboratorStatus.ACTIVE,
+        )
+        seeded.add(complaint.complainant_id)
+
+    for witness in complaint.witnesses.select_related("employee"):
+        employee_id = witness.employee_id
+
+        # "My line manager" resolves at seeding time to whoever that is now.
+        if witness.witness_type == enums.WitnessType.LINE_MANAGER:
+            complainant = complaint.complainant
+            employee_id = getattr(complainant, "line_manager_id", None)
+
+        # Departments name a group, not a person -- nothing to seed.
+        if employee_id is None or employee_id in seeded:
+            continue
+        # Never quietly enrol the respondent as a witness against themselves.
+        if employee_id == complaint.respondent_id:
+            continue
+
+        InvestigationCollaborator.objects.create(
+            investigation=investigation,
+            employee_id=employee_id,
+            role=enums.CollaboratorRole.WITNESS,
+            invited_by=invited_by,
+            invited_at=timezone.now(),
+            status=enums.CollaboratorStatus.INVITED,
+        )
+        seeded.add(employee_id)

@@ -130,13 +130,28 @@ over the same visible set, so badges always match the list beneath them.
 
 HR sets it at triage. Expect null on anything still Pending.
 
-## 10. Not built yet
+## 10. Read `available_transitions`, don't hardcode the state machine
+
+The complaint detail payload includes `available_transitions` — the moves that
+are legal from the case's current state. Render your action buttons from that
+rather than writing `if (state === 'SUBMITTED')` in the client.
+
+Appointing an investigator returns **409 Conflict** if the case has already
+moved on. That is the normal response to a double submission from a slow modal,
+not an error worth surfacing as one — refetch and re-render.
+
+## 11. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
 
-Still to come: triage and investigator assignment, the investigation itself,
-decision and resolution, withdrawal, PIP and follow-ups, reopening.
+Also available now: appointing an investigator (`appoint-investigator`), which
+opens the case, sets `due_date`, and is the point at which the respondent can
+first see the complaint.
+
+Still to come: the investigation itself (collaborators, information requests,
+meetings, report), decision and resolution, withdrawal, PIP and follow-ups,
+reopening.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be
 progressed — who acts on those is an open product question.

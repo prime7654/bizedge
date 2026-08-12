@@ -72,7 +72,7 @@ line-manager visibility of a complaint against themselves.
 - [x] 2 — `ComplaintAccessPolicy` + object-level permissions + orphan fallback
 - [x] 3 — Intake: four variants, conditional validation, intake override
 - [x] 4 — Lists, filters, detail views, metadata + summary endpoints
-- [ ] 5 — State machine, triage, due date, respondent visibility
+- [x] 5 — State machine, triage, due date, respondent visibility
 - [ ] 6 — Investigation
 - [ ] 7 — Decision & resolution
 - [ ] 8 — Withdrawal, both paths
@@ -97,6 +97,8 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `GET` | `/api/v1/employees/` | Employee picker (`?q=`, `?department=`, `?exclude_self=`) |
 | `GET` | `/api/v1/departments/` | Department picker |
 | `GET` | `/api/v1/trainings/` | Training catalogue for PIPs |
+| `POST` | `/api/v1/complaints/{id}/appoint-investigator/` | Open the case — HR only |
+| `GET` | `/api/v1/complaints/{id}/investigations/` | Rounds, including superseded ones |
 
 **Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
 `source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,

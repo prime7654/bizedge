@@ -202,6 +202,44 @@ paths:
               schema:
                 $ref: '#/components/schemas/ComplaintDetail'
           description: ''
+  /api/v1/complaints/{id}/appoint-investigator/:
+    post:
+      operationId: v1_complaints_appoint_investigator_create
+      description: Appoint an investigation lead and open the case. HR only. Pass
+        `"self"` as the lead to take the case yourself, which is the normal route
+        for a minor complaint. This is the point at which the respondent can first
+        see the complaint, and after which it can no longer be deleted.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppointInvestigatorRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AppointInvestigatorRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AppointInvestigatorRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplaintDetail'
+          description: ''
   /api/v1/complaints/{id}/attachments/:
     post:
       operationId: v1_complaints_attachments_create
@@ -233,6 +271,31 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Attachment'
+          description: ''
+  /api/v1/complaints/{id}/investigations/:
+    get:
+      operationId: v1_complaints_investigations_list
+      description: Investigation rounds on this complaint, oldest first.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Investigation'
           description: ''
   /api/v1/complaints/{id}/timeline/:
     get:
@@ -465,6 +528,26 @@ paths:
           description: ''
 components:
   schemas:
+    AppointInvestigatorRequest:
+      type: object
+      description: |-
+        Triage input.
+
+        ``lead`` accepts an employee id, or the literal ``"self"`` for HR taking
+        the case themselves -- which per Q4 is the normal route for a minor
+        complaint.
+      properties:
+        lead:
+          type: string
+          minLength: 1
+          description: Employee id, or "self" to assign the case to yourself.
+        due_date:
+          type: string
+          format: date
+          nullable: true
+          description: When the investigation should conclude. Set by HR at triage.
+      required:
+      - lead
     Attachment:
       type: object
       properties:
@@ -662,8 +745,19 @@ components:
           readOnly: true
           description: The respondent sees the allegation but not who filed it, unless
             HR explicitly releases the identity.
+        available_transitions:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        investigation:
+          allOf:
+          - $ref: '#/components/schemas/Investigation'
+          nullable: true
+          readOnly: true
       required:
       - attachments
+      - available_transitions
       - complainant
       - complainant_identity_released
       - complaint_type
@@ -676,6 +770,7 @@ components:
       - frequency
       - id
       - incident_date
+      - investigation
       - occurrence_count
       - reference
       - respondent
@@ -941,6 +1036,62 @@ components:
       description: |-
         * `ONE_TIME` - One time
         * `REPEAT_BEHAVIOR` - Repeat behaviour
+    Investigation:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        round:
+          type: integer
+          readOnly: true
+        lead:
+          allOf:
+          - $ref: '#/components/schemas/EmployeeBrief'
+          readOnly: true
+        lead_is_hr:
+          type: boolean
+          readOnly: true
+          description: True when HR assigned the case to themselves.
+        start_date:
+          type: string
+          format: date
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/InvestigationStateEnum'
+          readOnly: true
+        report_submitted_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        collaborators:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+      required:
+      - collaborators
+      - id
+      - lead
+      - lead_is_hr
+      - report_submitted_at
+      - round
+      - start_date
+      - state
+    InvestigationStateEnum:
+      enum:
+      - DRAFT
+      - IN_PROGRESS
+      - REPORT_SUBMITTED
+      type: string
+      description: |-
+        * `DRAFT` - Draft
+        * `IN_PROGRESS` - In progress
+        * `REPORT_SUBMITTED` - Report submitted
     PaginatedComplaintListList:
       type: object
       required:

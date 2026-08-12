@@ -28,8 +28,10 @@ from apps.grievances.events import record_event
 from apps.grievances import metadata as metadata_module
 from apps.grievances.filters import ComplaintFilter
 from apps.grievances.models import Attachment, Complaint
-from apps.grievances.permissions import CanViewComplaint, IsEmployee
+from apps.grievances.permissions import CanViewComplaint, IsEmployee, IsHR
 from apps.grievances.serializers import (
+    AppointInvestigatorSerializer,
+    InvestigationSerializer,
     AttachmentSerializer,
     ComplaintEventSerializer,
     ComplaintCreateSerializer,
@@ -38,6 +40,10 @@ from apps.grievances.serializers import (
     serializer_for_access,
 )
 from apps.grievances.services import ServiceError, file_complaint
+from apps.grievances.services import (
+    appoint_investigator as appoint_investigator_service,
+)
+from apps.grievances.transitions import TransitionError
 
 
 class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
@@ -304,3 +310,74 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
 
         events = complaint.events.select_related("actor").order_by("-occurred_at")
         return Response(ComplaintEventSerializer(events, many=True).data)
+
+    @extend_schema(
+        request=AppointInvestigatorSerializer,
+        responses={200: ComplaintDetailSerializer},
+        description=(
+            "Appoint an investigation lead and open the case. HR only. Pass "
+            '`\"self\"` as the lead to take the case yourself, which is the '
+            "normal route for a minor complaint. This is the point at which "
+            "the respondent can first see the complaint, and after which it "
+            "can no longer be deleted."
+        ),
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="appoint-investigator",
+        permission_classes=[IsEmployee, IsHR, CanViewComplaint],
+        filter_backends=[],
+    )
+    def appoint_investigator(self, request, pk=None):
+        complaint = self.get_object()
+        employee = employee_for(request.user)
+
+        serializer = AppointInvestigatorSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            appoint_investigator_service(
+                complaint=complaint,
+                actor=employee,
+                lead=serializer.validated_data["lead"],
+                due_date=serializer.validated_data.get("due_date"),
+                request=request,
+            )
+        except TransitionError as exc:
+            # 409: the request was well-formed, the case had simply moved on.
+            # Usually a double submission from a slow modal.
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ServiceError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+
+        complaint.refresh_from_db()
+        return Response(
+            ComplaintDetailSerializer(
+                complaint, context=self.get_serializer_context()
+            ).data
+        )
+
+    @extend_schema(
+        responses={200: InvestigationSerializer(many=True)},
+        description="Investigation rounds on this complaint, oldest first.",
+    )
+    @action(detail=True, methods=["get"], filter_backends=[], pagination_class=None)
+    def investigations(self, request, pk=None):
+        """Every round, including superseded ones.
+
+        A reopened case keeps its earlier rounds intact -- the record has to
+        show what was decided the first time and on what basis.
+        """
+        complaint = self.get_object()
+        employee = employee_for(request.user)
+
+        if ComplaintAccessPolicy.access_level(complaint, employee) is not AccessLevel.FULL:
+            raise PermissionDenied(_("You cannot view the investigation."))
+
+        rounds = complaint.investigations.select_related("lead").prefetch_related(
+            "collaborators__employee"
+        ).order_by("round")
+        return Response(InvestigationSerializer(rounds, many=True).data)

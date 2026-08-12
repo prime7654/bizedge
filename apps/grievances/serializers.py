@@ -20,6 +20,7 @@ from apps.grievances.models import (
     Complaint,
     ComplaintEvent,
     ComplaintWitness,
+    Investigation,
 )
 
 
@@ -232,6 +233,31 @@ class ComplaintCreateSerializer(serializers.Serializer):
         return attrs
 
 
+class InvestigationSerializer(serializers.ModelSerializer):
+    lead = EmployeeBriefSerializer(read_only=True)
+    collaborators = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Investigation
+        fields = (
+            "id", "round", "lead", "lead_is_hr", "start_date",
+            "state", "report_submitted_at", "collaborators",
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_collaborators(self, obj):
+        return [
+            {
+                "id": str(c.pk),
+                "employee": EmployeeBriefSerializer(c.employee).data,
+                "role": c.role,
+                "status": c.status,
+            }
+            for c in obj.collaborators.select_related("employee")
+        ]
+
+
 class ComplaintListSerializer(serializers.ModelSerializer):
     """Row shape for complaint lists.
 
@@ -286,12 +312,31 @@ class ComplaintDetailSerializer(ComplaintListSerializer):
     witnesses = ComplaintWitnessSerializer(many=True, read_only=True)
     attachments = AttachmentSerializer(many=True, read_only=True)
     filed_by = EmployeeBriefSerializer(read_only=True)
+    available_transitions = serializers.SerializerMethodField()
+    investigation = serializers.SerializerMethodField()
+
+    @extend_schema_field(serializers.ListField(child=serializers.CharField()))
+    def get_available_transitions(self, obj):
+        """Which moves are legal from here.
+
+        Served so the client can render action buttons from the server's
+        transition table instead of keeping its own copy of the state machine.
+        """
+        from apps.grievances.transitions import available_transitions
+
+        return available_transitions(obj.state)
+
+    @extend_schema_field(InvestigationSerializer(allow_null=True))
+    def get_investigation(self, obj):
+        current = obj.current_investigation
+        return InvestigationSerializer(current).data if current else None
 
     class Meta(ComplaintListSerializer.Meta):
         fields = ComplaintListSerializer.Meta.fields + (
             "description", "incident_date", "frequency", "occurrence_count",
             "filed_by", "witnesses", "attachments", "visibility_requested",
-            "complainant_identity_released",
+            "complainant_identity_released", "available_transitions",
+            "investigation",
         )
         read_only_fields = fields
 
@@ -336,3 +381,46 @@ class ComplaintEventSerializer(serializers.ModelSerializer):
             "from_state", "to_state", "payload", "occurred_at",
         )
         read_only_fields = fields
+
+
+class AppointInvestigatorSerializer(serializers.Serializer):
+    """Triage input.
+
+    ``lead`` accepts an employee id, or the literal ``"self"`` for HR taking
+    the case themselves -- which per Q4 is the normal route for a minor
+    complaint.
+    """
+
+    lead = serializers.CharField(
+        help_text='Employee id, or "self" to assign the case to yourself.'
+    )
+    due_date = serializers.DateField(
+        required=False,
+        allow_null=True,
+        help_text="When the investigation should conclude. Set by HR at triage.",
+    )
+
+    def validate_due_date(self, value):
+        if value is None:
+            return value
+        from django.utils import timezone
+
+        if value < timezone.localdate():
+            raise serializers.ValidationError("The due date cannot be in the past.")
+        return value
+
+    def validate_lead(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Select who will investigate this.")
+
+        employee = self.context["employee"]
+        if value == "self":
+            return employee
+
+        lead = Employee.objects.filter(
+            pk=value, organisation_id=employee.organisation_id, is_active=True
+        ).first()
+        if lead is None:
+            raise serializers.ValidationError("No such employee in this organisation.")
+        return lead
