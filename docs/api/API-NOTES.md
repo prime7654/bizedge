@@ -140,7 +140,26 @@ Appointing an investigator returns **409 Conflict** if the case has already
 moved on. That is the normal response to a double submission from a slow modal,
 not an error worth surfacing as one — refetch and re-render.
 
-## 11. Not built yet
+## 11. The collaborator inbox is deliberately tiny
+
+`/me/information-requests/` is what someone sees when they are asked to give
+evidence. It returns the question, who asked it, and the case reference —
+nothing else. No complaint description, no complainant, no other answers.
+
+That is not an oversight, and please don't work around it. If a screen needs
+more, raise it rather than pulling from another endpoint: a collaborator has no
+access to the complaint or the investigation, and those calls will 404.
+
+Answering twice returns **400**. Answering someone else's question returns
+**404**, not 403 — a 403 would confirm the id exists.
+
+## 12. HR can read an investigation but not write to it
+
+Only the appointed lead can invite collaborators, ask questions, record
+meetings or submit the report. HR gets 403 on those. Taking over means
+reassigning the case, which leaves an audit trail.
+
+## 13. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
@@ -149,8 +168,10 @@ Also available now: appointing an investigator (`appoint-investigator`), which
 opens the case, sets `due_date`, and is the point at which the respondent can
 first see the complaint.
 
-Still to come: the investigation itself (collaborators, information requests,
-meetings, report), decision and resolution, withdrawal, PIP and follow-ups,
+The investigation is now available too: collaborators, information requests,
+meetings, notes and report submission.
+
+Still to come: decision and resolution, withdrawal, PIP and follow-ups,
 reopening.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be

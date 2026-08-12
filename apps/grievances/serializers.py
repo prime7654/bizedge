@@ -20,7 +20,11 @@ from apps.grievances.models import (
     Complaint,
     ComplaintEvent,
     ComplaintWitness,
+    InformationRequest,
+    InformationResponse,
     Investigation,
+    InvestigationMeeting,
+    InvestigationNote,
 )
 
 
@@ -424,3 +428,188 @@ class AppointInvestigatorSerializer(serializers.Serializer):
         if lead is None:
             raise serializers.ValidationError("No such employee in this organisation.")
         return lead
+
+
+# ---------------------------------------------------------------------------
+# Investigation
+# ---------------------------------------------------------------------------
+
+
+class InviteCollaboratorSerializer(serializers.Serializer):
+    employee = serializers.PrimaryKeyRelatedField(queryset=Employee.objects.none())
+    role = serializers.ChoiceField(
+        choices=enums.CollaboratorRole.choices,
+        default=enums.CollaboratorRole.OTHER,
+    )
+
+    def get_fields(self):
+        fields = super().get_fields()
+        organisation_id = self.context.get("organisation_id")
+        if organisation_id is not None:
+            fields["employee"].queryset = Employee.objects.filter(
+                organisation_id=organisation_id, is_active=True
+            )
+        return fields
+
+
+class RequestInformationSerializer(serializers.Serializer):
+    prompt = serializers.CharField(max_length=5000)
+    due_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def validate_prompt(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Enter the question you want answered.")
+        return value
+
+
+class RespondToRequestSerializer(serializers.Serializer):
+    body = serializers.CharField(max_length=20000)
+
+    def validate_body(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Enter your response.")
+        return value
+
+
+class InformationResponseSerializer(serializers.ModelSerializer):
+    responded_by = EmployeeBriefSerializer(read_only=True)
+
+    class Meta:
+        model = InformationResponse
+        fields = ("id", "body", "responded_by", "responded_at")
+        read_only_fields = fields
+
+
+class InformationRequestSerializer(serializers.ModelSerializer):
+    """The lead's view: question plus the whole answer thread."""
+
+    responses = InformationResponseSerializer(many=True, read_only=True)
+    requested_by = EmployeeBriefSerializer(read_only=True)
+    collaborator_employee = EmployeeBriefSerializer(
+        source="collaborator.employee", read_only=True
+    )
+
+    class Meta:
+        model = InformationRequest
+        fields = (
+            "id", "prompt", "status", "requested_by", "requested_at",
+            "due_at", "collaborator", "collaborator_employee", "responses",
+        )
+        read_only_fields = fields
+
+
+class MyInformationRequestSerializer(serializers.ModelSerializer):
+    """The collaborator's view. Deliberately, almost nothing.
+
+    A person asked to give evidence sees the question, who asked it, and the
+    case reference so they know what it concerns. They do **not** see the
+    complaint description, who filed it, who else was asked, or any other
+    answer. Widening this serializer is a privacy regression -- if a field
+    seems useful here, check the spec before adding it.
+    """
+
+    requested_by = EmployeeBriefSerializer(read_only=True)
+    complaint_reference = serializers.CharField(
+        source="investigation.complaint.reference", read_only=True
+    )
+
+    class Meta:
+        model = InformationRequest
+        fields = (
+            "id", "prompt", "requested_by", "requested_at",
+            "due_at", "complaint_reference",
+        )
+        read_only_fields = fields
+
+
+class MeetingSerializer(serializers.ModelSerializer):
+    recorded_by = EmployeeBriefSerializer(read_only=True)
+    attendees = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvestigationMeeting
+        fields = (
+            "id", "meeting_date", "findings", "recorded_by",
+            "attendees", "created_at",
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_attendees(self, obj):
+        return [
+            EmployeeBriefSerializer(c.employee).data
+            for c in obj.attendees.select_related("employee")
+        ]
+
+
+class RecordMeetingSerializer(serializers.Serializer):
+    meeting_date = serializers.DateField()
+    findings = serializers.CharField(max_length=50000)
+    attendees = serializers.PrimaryKeyRelatedField(
+        queryset=Employee.objects.none(), many=True, required=False
+    )
+
+    def get_fields(self):
+        fields = super().get_fields()
+        organisation_id = self.context.get("organisation_id")
+        if organisation_id is not None:
+            fields["attendees"].child_relation.queryset = Employee.objects.filter(
+                organisation_id=organisation_id, is_active=True
+            )
+        return fields
+
+    def validate_meeting_date(self, value):
+        from django.utils import timezone
+
+        if value > timezone.localdate():
+            raise serializers.ValidationError("A meeting cannot be in the future.")
+        return value
+
+    def validate_findings(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Record what came out of the meeting.")
+        return value
+
+
+class InvestigationNoteSerializer(serializers.ModelSerializer):
+    author = EmployeeBriefSerializer(read_only=True)
+
+    class Meta:
+        model = InvestigationNote
+        fields = ("id", "body", "author", "created_at")
+        read_only_fields = ("id", "author", "created_at")
+
+    def validate_body(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("The note cannot be empty.")
+        return value
+
+
+class InvestigationDetailSerializer(InvestigationSerializer):
+    """Everything the lead needs on one screen."""
+
+    information_requests = serializers.SerializerMethodField()
+    meetings = MeetingSerializer(many=True, read_only=True)
+    notes = InvestigationNoteSerializer(many=True, read_only=True)
+    attachments = AttachmentSerializer(many=True, read_only=True)
+    complaint_reference = serializers.CharField(
+        source="complaint.reference", read_only=True
+    )
+
+    class Meta(InvestigationSerializer.Meta):
+        fields = InvestigationSerializer.Meta.fields + (
+            "complaint", "complaint_reference", "information_requests",
+            "meetings", "notes", "attachments",
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(InformationRequestSerializer(many=True))
+    def get_information_requests(self, obj):
+        queryset = obj.information_requests.select_related(
+            "requested_by", "collaborator__employee"
+        ).prefetch_related("responses__responded_by")
+        return InformationRequestSerializer(queryset, many=True).data

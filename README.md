@@ -73,7 +73,7 @@ line-manager visibility of a complaint against themselves.
 - [x] 3 — Intake: four variants, conditional validation, intake override
 - [x] 4 — Lists, filters, detail views, metadata + summary endpoints
 - [x] 5 — State machine, triage, due date, respondent visibility
-- [ ] 6 — Investigation
+- [x] 6 — Investigation
 - [ ] 7 — Decision & resolution
 - [ ] 8 — Withdrawal, both paths
 - [ ] 9 — PIP, follow-ups, Celery reminders
@@ -99,6 +99,15 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `GET` | `/api/v1/trainings/` | Training catalogue for PIPs |
 | `POST` | `/api/v1/complaints/{id}/appoint-investigator/` | Open the case — HR only |
 | `GET` | `/api/v1/complaints/{id}/investigations/` | Rounds, including superseded ones |
+| `GET` | `/api/v1/investigations/{id}/` | The lead's workspace |
+| `POST` | `/api/v1/investigations/{id}/collaborators/` | Invite someone (safe to repeat) |
+| `DELETE` | `/api/v1/investigations/{id}/collaborators/{cid}` | Soft-remove |
+| `POST` | `.../collaborators/{cid}/request-information/` | Ask a question |
+| `POST` | `/api/v1/investigations/{id}/meetings/` | Record a meeting |
+| `POST` | `/api/v1/investigations/{id}/notes/` | Add a note |
+| `POST` | `/api/v1/investigations/{id}/submit-report/` | Hand back to HR |
+| `GET` | `/api/v1/me/information-requests/` | A collaborator's inbox |
+| `POST` | `/api/v1/me/information-requests/{id}/respond/` | Answer a question |
 
 **Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
 `source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,

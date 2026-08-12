@@ -20,8 +20,11 @@ from apps.grievances.events import record_event
 from apps.grievances.models import (
     Complaint,
     ComplaintWitness,
+    InformationRequest,
+    InformationResponse,
     Investigation,
     InvestigationCollaborator,
+    InvestigationMeeting,
 )
 from apps.grievances.references import next_reference
 
@@ -342,3 +345,356 @@ def _seed_collaborators(investigation, complaint, *, invited_by) -> None:
             status=enums.CollaboratorStatus.INVITED,
         )
         seeded.add(employee_id)
+
+
+# ---------------------------------------------------------------------------
+# Investigation
+# ---------------------------------------------------------------------------
+
+#: Bounds on free text. Long enough for a real answer, short enough that a
+#: paste-bomb cannot fill the database or the audit trail.
+MAX_PROMPT_CHARS = 5_000
+MAX_RESPONSE_CHARS = 20_000
+MAX_FINDINGS_CHARS = 50_000
+
+
+def _require_text(value: str, field: str, limit: int) -> str:
+    """Validate free text at the service boundary, not only in the serializer.
+
+    Services are reachable from the admin and management commands, which do not
+    run serializer validation.
+    """
+    value = (value or "").strip()
+    if not value:
+        raise ServiceError(f"{field} cannot be empty.")
+    if len(value) > limit:
+        raise ServiceError(
+            f"{field} is too long ({len(value)} characters, limit {limit})."
+        )
+    return value
+
+
+@transaction.atomic
+def invite_collaborator(
+    *,
+    investigation: Investigation,
+    actor,
+    employee,
+    role: str = enums.CollaboratorRole.OTHER,
+    request=None,
+) -> InvestigationCollaborator:
+    """Add someone to an investigation.
+
+    Idempotent by design. A duplicate invite returns the existing collaborator
+    rather than raising, because the unique constraint would otherwise surface
+    as a 500 on a double-click, and re-inviting someone is a harmless intent.
+    Re-inviting a previously removed collaborator reactivates them.
+    """
+    if employee is None:
+        raise ServiceError("Select someone to invite.")
+    if employee.organisation_id != investigation.complaint.organisation_id:
+        raise ServiceError("That person is not in this organisation.")
+    if role not in enums.CollaboratorRole.values:
+        raise ServiceError(f"Unknown collaborator role: {role!r}")
+
+    existing = InvestigationCollaborator.objects.filter(
+        investigation=investigation, employee=employee
+    ).first()
+    if existing is not None:
+        if existing.status == enums.CollaboratorStatus.REMOVED:
+            existing.status = enums.CollaboratorStatus.INVITED
+            existing.invited_by = actor
+            existing.invited_at = timezone.now()
+            existing.save(update_fields=["status", "invited_by", "invited_at"])
+            record_event(
+                investigation.complaint,
+                verb=enums.EventVerb.COLLABORATOR_INVITED,
+                actor=actor,
+                payload={"employee_id": str(employee.pk), "reinstated": True},
+                request=request,
+            )
+        return existing
+
+    collaborator = InvestigationCollaborator.objects.create(
+        investigation=investigation,
+        employee=employee,
+        role=role,
+        invited_by=actor,
+        invited_at=timezone.now(),
+        status=enums.CollaboratorStatus.INVITED,
+    )
+
+    record_event(
+        investigation.complaint,
+        verb=enums.EventVerb.COLLABORATOR_INVITED,
+        actor=actor,
+        payload={"employee_id": str(employee.pk), "role": role},
+        request=request,
+    )
+    notifications.notify(
+        notifications.COLLABORATOR_INVITED,
+        investigation.complaint,
+        [employee],
+        reference=investigation.complaint.reference,
+    )
+    return collaborator
+
+
+@transaction.atomic
+def remove_collaborator(
+    *, collaborator: InvestigationCollaborator, actor, request=None
+) -> InvestigationCollaborator:
+    """Take someone off an investigation.
+
+    Soft removal. The audit trail has to show who was involved even after they
+    were taken off, and their answers stay on the record -- evidence already
+    given does not become un-given.
+
+    Any question still outstanding for them is expired, so it stops appearing
+    in an inbox they can no longer act on.
+    """
+    collaborator.status = enums.CollaboratorStatus.REMOVED
+    collaborator.save(update_fields=["status"])
+
+    expired = InformationRequest.objects.filter(
+        collaborator=collaborator, status=enums.InformationRequestStatus.PENDING
+    ).update(status=enums.InformationRequestStatus.EXPIRED)
+
+    record_event(
+        collaborator.investigation.complaint,
+        verb=enums.EventVerb.COLLABORATOR_REMOVED,
+        actor=actor,
+        payload={
+            "employee_id": str(collaborator.employee_id),
+            "expired_requests": expired,
+        },
+        request=request,
+    )
+    return collaborator
+
+
+@transaction.atomic
+def request_information(
+    *,
+    collaborator: InvestigationCollaborator,
+    actor,
+    prompt: str,
+    due_at=None,
+    request=None,
+) -> InformationRequest:
+    """Put a written question to a collaborator.
+
+    Always creates a new request rather than editing the last one, so
+    "Request Additional Information" produces a dated thread. Overwriting would
+    destroy the record of what was originally asked.
+    """
+    investigation = collaborator.investigation
+    if investigation.state != enums.InvestigationState.IN_PROGRESS:
+        raise ServiceError(
+            "This investigation is no longer in progress, so no further "
+            "information can be requested."
+        )
+    if collaborator.status == enums.CollaboratorStatus.REMOVED:
+        raise ServiceError(
+            "That person has been removed from this investigation. "
+            "Re-invite them first."
+        )
+
+    prompt = _require_text(prompt, "The question", MAX_PROMPT_CHARS)
+
+    info_request = InformationRequest.objects.create(
+        investigation=investigation,
+        collaborator=collaborator,
+        prompt=prompt,
+        requested_by=actor,
+        due_at=due_at,
+        status=enums.InformationRequestStatus.PENDING,
+    )
+
+    if collaborator.status == enums.CollaboratorStatus.INVITED:
+        collaborator.status = enums.CollaboratorStatus.ACTIVE
+        collaborator.save(update_fields=["status"])
+
+    record_event(
+        investigation.complaint,
+        verb=enums.EventVerb.INFORMATION_REQUESTED,
+        actor=actor,
+        payload={
+            "collaborator_id": str(collaborator.pk),
+            "request_id": str(info_request.pk),
+        },
+        request=request,
+    )
+    notifications.notify(
+        notifications.INFORMATION_REQUESTED,
+        investigation.complaint,
+        [collaborator.employee],
+        reference=investigation.complaint.reference,
+    )
+    return info_request
+
+
+@transaction.atomic
+def respond_to_request(
+    *, info_request: InformationRequest, actor, body: str, request=None
+) -> InformationResponse:
+    """Answer a question.
+
+    Locks the request before checking its status: a double-submitted answer
+    would otherwise create two responses and mark the request answered twice.
+    """
+    info_request = InformationRequest.objects.select_for_update().get(
+        pk=info_request.pk
+    )
+    if info_request.status != enums.InformationRequestStatus.PENDING:
+        raise ServiceError("This request has already been answered or has expired.")
+
+    body = _require_text(body, "Your response", MAX_RESPONSE_CHARS)
+
+    response = InformationResponse.objects.create(
+        request=info_request, body=body, responded_by=actor
+    )
+    info_request.status = enums.InformationRequestStatus.ANSWERED
+    info_request.save(update_fields=["status"])
+
+    complaint = info_request.investigation.complaint
+    record_event(
+        complaint,
+        verb=enums.EventVerb.INFORMATION_RECEIVED,
+        actor=actor,
+        payload={"request_id": str(info_request.pk)},
+        request=request,
+    )
+    notifications.notify(
+        notifications.INFORMATION_RECEIVED,
+        complaint,
+        [info_request.investigation.lead],
+        reference=complaint.reference,
+    )
+    return response
+
+
+@transaction.atomic
+def record_meeting(
+    *,
+    investigation: Investigation,
+    actor,
+    meeting_date,
+    findings: str,
+    attendee_employees: list | None = None,
+    request=None,
+) -> InvestigationMeeting:
+    """Record a meeting and its findings.
+
+    Per C1 the attendee picker searches the whole organisation, so anyone named
+    who is not yet on the case is added as a collaborator. Otherwise the record
+    ends up pointing at people the investigation does not know about.
+    """
+    meeting_date = _coerce_date(meeting_date)
+    if meeting_date is None:
+        raise ServiceError("Enter the date of the meeting.")
+    if meeting_date > timezone.localdate():
+        raise ServiceError("A meeting cannot be recorded with a future date.")
+    if investigation.state != enums.InvestigationState.IN_PROGRESS:
+        raise ServiceError("This investigation is no longer in progress.")
+
+    findings = _require_text(findings, "The findings", MAX_FINDINGS_CHARS)
+
+    meeting = InvestigationMeeting.objects.create(
+        investigation=investigation,
+        meeting_date=meeting_date,
+        findings=findings,
+        recorded_by=actor,
+    )
+
+    for employee in attendee_employees or []:
+        collaborator = invite_collaborator(
+            investigation=investigation,
+            actor=actor,
+            employee=employee,
+            role=enums.CollaboratorRole.OTHER,
+            request=request,
+        )
+        meeting.attendees.add(collaborator)
+
+    record_event(
+        investigation.complaint,
+        verb=enums.EventVerb.MEETING_RECORDED,
+        actor=actor,
+        payload={
+            "meeting_id": str(meeting.pk),
+            "attendees": len(attendee_employees or []),
+        },
+        request=request,
+    )
+    return meeting
+
+
+@transaction.atomic
+def submit_report(*, investigation: Investigation, actor, request=None) -> Investigation:
+    """Close the investigation and hand the case back to HR for a decision.
+
+    Locked and guarded on both the investigation and the complaint: this sits
+    behind a slow modal and is a natural double-click, and submitting twice
+    would move an already-decided case backwards.
+
+    Deliberately does *not* require any minimum amount of recorded work. An
+    investigation that found nothing is a legitimate outcome, and a server-side
+    quota on meetings or notes would only encourage padding.
+    """
+    investigation = Investigation.objects.select_for_update().get(pk=investigation.pk)
+    if investigation.state == enums.InvestigationState.REPORT_SUBMITTED:
+        raise transitions.TransitionError(
+            "This investigation report has already been submitted."
+        )
+
+    complaint = Complaint.objects.select_for_update().get(
+        pk=investigation.complaint_id
+    )
+    transition = transitions.check(complaint, "submit_report")
+
+    previous_state = complaint.state
+    now = timezone.now()
+
+    investigation.state = enums.InvestigationState.REPORT_SUBMITTED
+    investigation.report_submitted_at = now
+    investigation.report_submitted_by = actor
+    investigation.save(
+        update_fields=["state", "report_submitted_at", "report_submitted_by"]
+    )
+
+    complaint.state = transition.target
+    complaint.updated_by = actor
+    complaint.save(update_fields=["state", "updated_by", "updated_at"])
+
+    # Nothing further can be asked once the report is in.
+    InformationRequest.objects.filter(
+        investigation=investigation, status=enums.InformationRequestStatus.PENDING
+    ).update(status=enums.InformationRequestStatus.EXPIRED)
+
+    record_event(
+        complaint,
+        verb=enums.EventVerb.REPORT_SUBMITTED,
+        actor=actor,
+        from_state=previous_state,
+        to_state=complaint.state,
+        payload={"investigation_id": str(investigation.pk), "round": investigation.round},
+        request=request,
+    )
+    notifications.notify(
+        notifications.REPORT_SUBMITTED,
+        complaint,
+        _hr_recipients(complaint),
+        reference=complaint.reference,
+    )
+    return investigation
+
+
+def _hr_recipients(complaint: Complaint) -> list:
+    from apps.directory.models import Employee  # local: swappable model
+
+    return list(
+        Employee.objects.filter(
+            organisation_id=complaint.organisation_id, is_hr=True, is_active=True
+        )
+    )
