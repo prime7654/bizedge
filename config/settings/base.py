@@ -34,6 +34,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # Serves static files in deployment. Without it /admin/ and /api/docs/
+    # render unstyled, because nothing else is serving them.
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -62,16 +65,30 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("POSTGRES_DB", default="bizedge"),
-        "USER": env("POSTGRES_USER", default="bizedge"),
-        "PASSWORD": env("POSTGRES_PASSWORD", default="bizedge"),
-        "HOST": env("POSTGRES_HOST", default="localhost"),
-        "PORT": env("POSTGRES_PORT", default="5432"),
+# Managed hosts (Render, Railway, Heroku) inject a single DATABASE_URL; local
+# Docker Compose sets the discrete POSTGRES_* vars. Support both rather than
+# forcing one, so the same settings file works in every environment.
+if env("DATABASE_URL", default=None):
+    DATABASES = {
+        "default": env.db(
+            "DATABASE_URL",
+            # Managed Postgres requires TLS; without this the connection is
+            # refused rather than silently downgraded.
+            engine="django.db.backends.postgresql",
+        )
     }
-}
+    DATABASES["default"].setdefault("CONN_MAX_AGE", 600)
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.postgresql",
+            "NAME": env("POSTGRES_DB", default="bizedge"),
+            "USER": env("POSTGRES_USER", default="bizedge"),
+            "PASSWORD": env("POSTGRES_PASSWORD", default="bizedge"),
+            "HOST": env("POSTGRES_HOST", default="localhost"),
+            "PORT": env("POSTGRES_PORT", default="5432"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = [
     {"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"},
@@ -87,6 +104,12 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {
+        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage"
+    },
+}
 MEDIA_URL = "media/"
 MEDIA_ROOT = BASE_DIR / "media"
 

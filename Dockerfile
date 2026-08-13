@@ -10,8 +10,22 @@ RUN apt-get update \
  && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-dev.txt ./
+# Dev requirements include pytest, which staging does not need but which makes
+# it possible to run the suite against the deployed database if something only
+# reproduces there. Drop to requirements.txt for a real production image.
 RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
+# Collected at build time so the web process starts serving immediately.
+# DEBUG and a dummy key are set only for this command -- collectstatic does not
+# touch the database, and prod settings refuse to import without a host.
+RUN DJANGO_SETTINGS_MODULE=config.settings.dev SECRET_KEY=build-only \
+    python manage.py collectstatic --noinput
+
 EXPOSE 8000
+
+# Compose overrides this for local development. Render supplies its own command
+# via render.yaml, which also runs migrations first.
+CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", \
+     "--workers", "2", "--timeout", "60", "--access-logfile", "-"]

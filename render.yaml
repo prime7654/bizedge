@@ -1,0 +1,44 @@
+# Render blueprint. Commit this and Render builds the environment from it,
+# rather than someone clicking through the dashboard and nobody knowing what
+# was set.
+#
+# Deliberately minimal: one web service and one database. No Celery worker and
+# no beat scheduler, because free web services sleep when idle and a scheduler
+# that sleeps does not schedule. Run reminders by hand in staging:
+#
+#     python manage.py send_due_pip_reminders
+#
+# When this needs to be automatic, add a Cron Job service (about $1/month)
+# running that same command. The logic lives in the management command
+# precisely so the scheduler is a deployment choice, not a code change.
+
+databases:
+  - name: bizedge-grievances-db
+    databaseName: bizedge
+    user: bizedge
+    plan: free
+
+services:
+  - type: web
+    name: bizedge-grievances-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerCommand: >-
+      sh -c "python manage.py migrate --noinput &&
+      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
+      --workers 2 --timeout 60 --access-logfile -"
+    plan: free
+    healthCheckPath: /api/schema/
+    envVars:
+      - key: DJANGO_SETTINGS_MODULE
+        value: config.settings.prod
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DEBUG
+        value: "False"
+      - key: DATABASE_URL
+        fromDatabase:
+          name: bizedge-grievances-db
+          property: connectionString
+      - key: PYTHONUNBUFFERED
+        value: "1"

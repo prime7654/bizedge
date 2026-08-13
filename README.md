@@ -116,6 +116,20 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `GET` | `/api/v1/pips/` | Performance improvement plans — HR only |
 | `POST` | `/api/v1/pips/{id}/follow-ups/{fid}/complete/` | Mark a check-in done |
 
+## Deploying
+
+See `docs/DEPLOY-RENDER.md`. Short version: `render.yaml` builds a web service
+and a Postgres database from a Blueprint; no Celery in staging, because free
+web services sleep and a sleeping scheduler does not schedule.
+
+Settings read `DATABASE_URL` when it is present (managed hosts) and fall back to
+the discrete `POSTGRES_*` vars (local Docker Compose), so one settings file
+covers both.
+
+```bash
+python manage.py seed_demo   # invented data for a staging environment
+```
+
 ## Scheduled work
 
 One job, and it is the only part of this module not driven by a user action:
