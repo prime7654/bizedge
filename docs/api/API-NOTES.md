@@ -204,7 +204,29 @@ complaint is not visible to them at all yet.
 
 Once the case is awaiting a decision or already closed, withdrawal returns 409.
 
-## 15. Not built yet
+## 15. Reopening adds a round, it does not undo the last one
+
+`POST /complaints/{id}/reopen/` requires a `lead` (an employee id, or `"self"`)
+because a new round needs an owner.
+
+The previous investigation and its decision stay exactly as they were. When you
+render case history, expect **multiple** investigations and **multiple**
+resolutions — `/investigations/` and `/resolutions/` both return a list, oldest
+first. Do not show only the latest and call it "the outcome".
+
+Returns 409 unless the case is currently resolved.
+
+## 16. Deletion is narrow, and soft
+
+`DELETE /complaints/{id}/` succeeds only for the HR user who **created** the
+record, and only before an investigator is appointed. Everyone else gets 403,
+including other HR users and the complainant.
+
+It is a soft delete: the complaint disappears from lists and detail, but the
+record and its audit trail are retained. Whether permanent removal is ultimately
+required is still with HR Compliance.
+
+## 17. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
@@ -220,8 +242,11 @@ Decision and resolution is now available, including PIP creation.
 
 Withdrawal is now available too.
 
-Still to come: PIP follow-up reminders (they need a scheduled task runner) and
-reopening.
+Reopening and deletion are now available.
+
+Still to come: PIP follow-up reminders, which need a scheduled task runner —
+the plans and their check-in schedules are created, but nothing sends the
+reminders yet.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be
 progressed — who acts on those is an open product question.

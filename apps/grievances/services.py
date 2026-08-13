@@ -1024,3 +1024,170 @@ def withdraw_complaint(
         closed_outright=complaint.state == enums.ComplaintState.WITHDRAWN,
     )
     return complaint
+
+
+# ---------------------------------------------------------------------------
+# Reopen
+# ---------------------------------------------------------------------------
+
+
+@transaction.atomic
+def reopen_complaint(
+    *, complaint: Complaint, actor, lead, reason: str = "", request=None
+) -> Investigation:
+    """Reopen a closed case as a fresh investigation round.
+
+    Per B2 this is also the route for an inadequate report: HR closes the case,
+    then reopens it.
+
+    **The previous round is never touched.** Its investigation, collaborators,
+    meetings, notes and resolution stay exactly as they were. The record has to
+    show what was decided the first time and on what basis -- in a tribunal,
+    "we changed our minds" and "we rewrote the original finding" are very
+    different positions.
+
+    A new round needs an owner, so a lead is required. It may be whoever ran the
+    previous round.
+    """
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+    transition = transitions.check(complaint, "reopen")
+
+    if lead is None:
+        raise ServiceError("Select who will investigate this round.")
+    if lead.organisation_id != complaint.organisation_id:
+        raise ServiceError("That person is not in this organisation.")
+
+    _assert_no_conflict(complaint, actor, lead)
+
+    previous = complaint.investigations.order_by("-round").first()
+    next_round = (previous.round if previous else 0) + 1
+
+    investigation = Investigation.objects.create(
+        complaint=complaint,
+        round=next_round,
+        lead=lead,
+        lead_is_hr=bool(getattr(lead, "is_hr", False)),
+        invited_by=actor,
+        invited_at=timezone.now(),
+        start_date=timezone.localdate(),
+        state=enums.InvestigationState.IN_PROGRESS,
+    )
+
+    previous_state = complaint.state
+    complaint.state = transition.target
+    complaint.updated_by = actor
+    # Clear any stale withdrawal flag, so the next decision is not silently
+    # attributed to a withdrawal from the previous round.
+    complaint.withdrawal_requested_at = None
+    complaint.withdrawal_requested_by = None
+    complaint.save(
+        update_fields=[
+            "state", "updated_by", "updated_at",
+            "withdrawal_requested_at", "withdrawal_requested_by",
+        ]
+    )
+
+    _seed_collaborators(investigation, complaint, invited_by=actor)
+
+    record_event(
+        complaint,
+        verb=enums.EventVerb.REOPENED,
+        actor=actor,
+        from_state=previous_state,
+        to_state=complaint.state,
+        payload={
+            "round": next_round,
+            "lead_id": str(lead.pk),
+            "reason": (reason or "").strip()[:MAX_WITHDRAWAL_REASON_CHARS],
+        },
+        request=request,
+    )
+    notifications.notify(
+        notifications.COMPLAINT_REOPENED,
+        complaint,
+        [lead],
+        reference=complaint.reference,
+        round=next_round,
+    )
+    return investigation
+
+
+# ---------------------------------------------------------------------------
+# Deletion
+# ---------------------------------------------------------------------------
+
+
+def can_delete(complaint: Complaint, employee) -> bool:
+    """Whether ``employee`` may remove ``complaint``.
+
+    Q5, and deliberately narrow: only while the case is still SUBMITTED, and
+    only the HR user who created the record. Not any HR user, not the
+    complainant.
+    """
+    if employee is None:
+        return False
+    if complaint.organisation_id != employee.organisation_id:
+        return False
+    if not complaint.is_open_for_deletion:
+        return False
+    if not getattr(employee, "is_hr", False):
+        return False
+    return complaint.created_by_id == employee.pk
+
+
+def delete_complaint(*, complaint: Complaint, actor, request=None) -> Complaint:
+    """Remove a complaint from view.
+
+    Soft delete: the row and its audit trail survive, and the default manager
+    hides it. HR Compliance has not confirmed whether permanent removal is
+    ultimately required, and this is the reversible choice -- adding a purge on
+    top of soft delete later is straightforward, whereas recovering records
+    destroyed under a wrong assumption is not.
+
+    **Every attempt is recorded, including refused ones.** Someone repeatedly
+    trying to delete complaints they did not create is exactly what an audit
+    needs to surface.
+
+    Note the shape: the refusal is written *outside* any transaction, before
+    raising. Writing it inside an ``atomic`` block and then raising rolls the
+    audit row back with everything else -- the refusal record would silently
+    never exist. There is a test for this.
+
+    (If a caller ever wraps this in an outer transaction -- ATOMIC_REQUESTS, or
+    a bulk import -- the same rollback applies. This project does not, but it
+    is the thing to check if refusal events ever go missing.)
+    """
+    complaint = Complaint.objects.get(pk=complaint.pk)
+
+    if not can_delete(complaint, actor):
+        record_event(
+            complaint,
+            verb=enums.EventVerb.DELETE_ATTEMPTED,
+            actor=actor,
+            payload={"allowed": False, "state": complaint.state},
+            request=request,
+        )
+        raise ServiceError(
+            "This complaint cannot be deleted. Only the HR user who created it "
+            "may remove it, and only before an investigator is appointed."
+        )
+
+    with transaction.atomic():
+        complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+        # Re-check under the lock: an investigator could have been appointed
+        # between the check above and acquiring it.
+        if not can_delete(complaint, actor):
+            raise ServiceError(
+                "This complaint can no longer be deleted -- it changed while "
+                "the request was in flight."
+            )
+        record_event(
+            complaint,
+            verb=enums.EventVerb.DELETED,
+            actor=actor,
+            payload={"allowed": True, "state": complaint.state},
+            request=request,
+        )
+        complaint.delete(deleted_by=actor)
+
+    return complaint

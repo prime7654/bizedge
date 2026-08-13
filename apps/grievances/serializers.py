@@ -801,3 +801,30 @@ class WithdrawComplaintSerializer(serializers.Serializer):
         max_length=2000,
         help_text="Optional. Recorded on the case history.",
     )
+
+
+class ReopenComplaintSerializer(serializers.Serializer):
+    """A reopened case needs an owner for the new round."""
+
+    lead = serializers.CharField(
+        help_text='Employee id, or "self" to take the new round yourself.'
+    )
+    reason = serializers.CharField(required=False, allow_blank=True, max_length=2000)
+
+    def validate_lead(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError(
+                "Select who will investigate this round."
+            )
+
+        employee = self.context["employee"]
+        if value == "self":
+            return employee
+
+        lead = Employee.objects.filter(
+            pk=value, organisation_id=employee.organisation_id, is_active=True
+        ).first()
+        if lead is None:
+            raise serializers.ValidationError("No such employee in this organisation.")
+        return lead

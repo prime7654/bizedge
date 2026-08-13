@@ -202,6 +202,26 @@ paths:
               schema:
                 $ref: '#/components/schemas/ComplaintDetail'
           description: ''
+    delete:
+      operationId: v1_complaints_destroy
+      description: 'Remove a complaint. Only the HR user who created it, and only
+        before an investigator is appointed. Soft: the record and its audit trail
+        are retained.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      security:
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
   /api/v1/complaints/{id}/appoint-investigator/:
     post:
       operationId: v1_complaints_appoint_investigator_create
@@ -296,6 +316,43 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/Investigation'
+          description: ''
+  /api/v1/complaints/{id}/reopen/:
+    post:
+      operationId: v1_complaints_reopen_create
+      description: Reopen a closed case as a new investigation round. HR only. The
+        previous round and its decision are left untouched. Returns 409 unless the
+        case is currently resolved.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenComplaintRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ReopenComplaintRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ReopenComplaintRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplaintDetail'
           description: ''
   /api/v1/complaints/{id}/resolution/:
     post:
@@ -2098,6 +2155,19 @@ components:
       required:
       - findings
       - meeting_date
+    ReopenComplaintRequest:
+      type: object
+      description: A reopened case needs an owner for the new round.
+      properties:
+        lead:
+          type: string
+          minLength: 1
+          description: Employee id, or "self" to take the new round yourself.
+        reason:
+          type: string
+          maxLength: 2000
+      required:
+      - lead
     RequestInformationRequest:
       type: object
       properties:

@@ -17,7 +17,7 @@ from django.db.models import Count, Q
 from django.db import transaction
 from django.utils.translation import gettext_lazy as _
 from drf_spectacular.utils import extend_schema
-from rest_framework import status, viewsets
+from rest_framework import mixins, status, viewsets
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -35,6 +35,7 @@ from apps.grievances.serializers import (
     AppointInvestigatorSerializer,
     InvestigationSerializer,
     ResolutionSerializer,
+    ReopenComplaintSerializer,
     ResolveComplaintSerializer,
     WithdrawComplaintSerializer,
     AttachmentSerializer,
@@ -50,10 +51,17 @@ from apps.grievances.services import (
 )
 from apps.grievances.services import resolve_complaint as resolve_complaint_service
 from apps.grievances.services import withdraw_complaint as withdraw_complaint_service
+from apps.grievances.services import (
+    delete_complaint as delete_complaint_service,
+)
+from apps.grievances.services import reopen_complaint as reopen_complaint_service
 from apps.grievances.transitions import TransitionError
 
 
-class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
+class ComplaintViewSet(
+    mixins.DestroyModelMixin,
+    viewsets.ReadOnlyModelViewSet,
+):
     """Complaints.
 
     Read and create only for now. State changes arrive in later steps as
@@ -523,3 +531,65 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
                 complaint, context=self.get_serializer_context()
             ).data
         )
+
+    @extend_schema(
+        request=ReopenComplaintSerializer,
+        responses={200: ComplaintDetailSerializer},
+        description=(
+            "Reopen a closed case as a new investigation round. HR only. The "
+            "previous round and its decision are left untouched. Returns 409 "
+            "unless the case is currently resolved."
+        ),
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        permission_classes=[IsEmployee, IsHR, CanViewComplaint],
+        filter_backends=[],
+    )
+    def reopen(self, request, pk=None):
+        complaint = self.get_object()
+        serializer = ReopenComplaintSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            reopen_complaint_service(
+                complaint=complaint,
+                actor=employee_for(request.user),
+                lead=serializer.validated_data["lead"],
+                reason=serializer.validated_data.get("reason", ""),
+                request=request,
+            )
+        except TransitionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ServiceError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+
+        complaint.refresh_from_db()
+        return Response(
+            ComplaintDetailSerializer(
+                complaint, context=self.get_serializer_context()
+            ).data
+        )
+
+    @extend_schema(
+        responses={204: None},
+        description=(
+            "Remove a complaint. Only the HR user who created it, and only "
+            "before an investigator is appointed. Soft: the record and its "
+            "audit trail are retained."
+        ),
+    )
+    def destroy(self, request, pk=None):
+        complaint = self.get_object()
+        try:
+            delete_complaint_service(
+                complaint=complaint,
+                actor=employee_for(request.user),
+                request=request,
+            )
+        except ServiceError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+        return Response(status=status.HTTP_204_NO_CONTENT)

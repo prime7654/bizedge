@@ -77,8 +77,8 @@ line-manager visibility of a complaint against themselves.
 - [x] 7 — Decision & resolution
 - [x] 8 — Withdrawal, both paths
 - [ ] 9 — PIP, follow-ups, Celery reminders
-- [ ] 10 — Reopen
-- [ ] 11 — Soft delete authorization
+- [x] 10 — Reopen
+- [x] 11 — Soft delete authorization
 - [ ] 12 — LM-only triage — deferred, awaiting Product
 
 Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
@@ -111,6 +111,8 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `POST` | `/api/v1/complaints/{id}/resolution/` | Decide and close — one transactional call |
 | `GET` | `/api/v1/complaints/{id}/resolutions/` | Decisions, one per round |
 | `POST` | `/api/v1/complaints/{id}/withdraw/` | Retract — complainant or HR only |
+| `POST` | `/api/v1/complaints/{id}/reopen/` | New round; previous round untouched |
+| `DELETE` | `/api/v1/complaints/{id}/` | Soft delete — HR creator, pre-investigation only |
 
 **Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
 `source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,
