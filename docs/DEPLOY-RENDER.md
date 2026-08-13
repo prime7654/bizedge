@@ -74,6 +74,47 @@ decided per employee, not per user.
 
 ---
 
+## Trying it yourself
+
+The quickest way to see what you built:
+
+**1. Log in** at `/api-auth/login/` — for example `priya` / `demo-password-1`.
+
+**2. Visit `/api/v1/complaints/`** in the same browser. DRF's browsable API
+renders the response as a page, with forms for POSTing and links to follow.
+
+**3. Log out and back in as someone else.** This is the part worth doing:
+
+| Login | Sees |
+|---|---|
+| `priya` (HR) | 4 of the 5 complaints — **not** the `LINE_MANAGER` one |
+| `alice` (line manager) | 1 — the one from her report, Daniel |
+| `bob` (employee) | 1 — his own |
+
+Same URL, different data. If you only ever test as HR you will not see that
+rule working, and the missing complaint looks like a bug rather than the
+headline design decision.
+
+Other things to try:
+
+- `/api/v1/complaints/summary/` — tab counts
+- `/api/v1/complaints/metadata/` — every dropdown and form rule
+- `/api/v1/me/information-requests/` as `daniel` — the collaborator inbox, which
+  shows the question put to him and nothing else
+- `/api/docs/` — Swagger UI, with "Try it out" once you are logged in
+
+### The Django admin
+
+The seeded users are **not** superusers, deliberately: their password is in the
+repo, and this service is on the public internet. Make your own:
+
+```bash
+docker compose run --rm -e DATABASE_URL="<external-url>" web python manage.py createsuperuser
+```
+
+Then link it to an Employee in `/admin/` → Directory → Employees, or the API
+will refuse it — access is decided per employee, not per user.
+
 ## What to send the frontend team
 
 The base URL, and these two files from `docs/api/`:
