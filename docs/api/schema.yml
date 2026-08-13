@@ -1001,6 +1001,7 @@ paths:
         name: follow_up_id
         schema:
           type: string
+        description: Check-in id on this plan.
         required: true
       - in: path
         name: id

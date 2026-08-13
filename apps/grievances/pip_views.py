@@ -7,7 +7,7 @@ told about it, but marking their own check-in complete is not theirs to do.
 from __future__ import annotations
 
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -53,6 +53,14 @@ class PIPPlanViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
     @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "follow_up_id",
+                str,
+                OpenApiParameter.PATH,
+                description="Check-in id on this plan.",
+            )
+        ],
         request=CompleteFollowUpSerializer,
         responses={200: FollowUpSerializer},
         description=(
