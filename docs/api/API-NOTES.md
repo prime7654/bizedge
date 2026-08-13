@@ -159,7 +159,33 @@ Only the appointed lead can invite collaborators, ask questions, record
 meetings or submit the report. HR gets 403 on those. Taking over means
 reassigning the case, which leaves an audit trail.
 
-## 13. Not built yet
+## 13. Closing a case is one call, not four
+
+`POST /complaints/{id}/resolution/` creates the decision, any PIP, its training
+assignments and its follow-up schedule together. Send the whole thing in one
+request — do not create the resolution and then add the PIP separately. There
+is no endpoint for that, deliberately: a network drop halfway would leave a PIP
+attached to a complaint that is still open.
+
+If any part is invalid, nothing is saved and you get field errors back. Retry
+the whole payload.
+
+The formal/informal rules are strict and mirror database constraints:
+
+| `resolution_type` | Required | Must be blank |
+|---|---|---|
+| `FORMAL` | `formal_resolution_type` | `informal_resolution_type` |
+| `INFORMAL` | `informal_resolution_type` | `formal_resolution_type` |
+| `NO_RESOLUTION_REQUIRED` | — | both |
+
+Either sub-type set to `OTHERS` additionally requires `resolution_note`.
+
+A PIP requires the complaint to name a respondent — a general complaint has
+nobody for the plan to apply to.
+
+Resolving an already-resolved case returns **409**.
+
+## 14. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
@@ -171,8 +197,10 @@ first see the complaint.
 The investigation is now available too: collaborators, information requests,
 meetings, notes and report submission.
 
-Still to come: decision and resolution, withdrawal, PIP and follow-ups,
-reopening.
+Decision and resolution is now available, including PIP creation.
+
+Still to come: withdrawal, the PIP follow-up reminders (they need a scheduled
+task runner), and reopening.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be
 progressed — who acts on those is an open product question.

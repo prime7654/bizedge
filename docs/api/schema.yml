@@ -297,6 +297,68 @@ paths:
                 items:
                   $ref: '#/components/schemas/Investigation'
           description: ''
+  /api/v1/complaints/{id}/resolution/:
+    post:
+      operationId: v1_complaints_resolution_create
+      description: 'Record the decision and close the case. HR only. One call: the
+        resolution, any PIP, its training assignments and its follow-up schedule are
+        created together or not at all. Returns 409 if the case has already been resolved.'
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveComplaintRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ResolveComplaintRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ResolveComplaintRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplaintDetail'
+          description: ''
+  /api/v1/complaints/{id}/resolutions/:
+    get:
+      operationId: v1_complaints_resolutions_list
+      description: Decisions on this complaint, one per investigation round.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Resolution'
+          description: ''
   /api/v1/complaints/{id}/timeline/:
     get:
       operationId: v1_complaints_timeline_list
@@ -1061,6 +1123,11 @@ components:
           - $ref: '#/components/schemas/Investigation'
           nullable: true
           readOnly: true
+        resolution:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          readOnly: true
       required:
       - attachments
       - available_transitions
@@ -1079,6 +1146,7 @@ components:
       - investigation
       - occurrence_count
       - reference
+      - resolution
       - respondent
       - source
       - stage
@@ -1276,6 +1344,22 @@ components:
       - employee
       - id
       - witness_type
+    DecisionEnum:
+      enum:
+      - SUBSTANTIATED
+      - UNSUBSTANTIATED
+      - PARTIALLY_SUBSTANTIATED
+      - INCONCLUSIVE
+      - WITHDRAWN_BY_COMPLAINANT
+      - NO_FURTHER_ACTION_REQUIRED
+      type: string
+      description: |-
+        * `SUBSTANTIATED` - Substantiated
+        * `UNSUBSTANTIATED` - Unsubstantiated
+        * `PARTIALLY_SUBSTANTIATED` - Partially substantiated
+        * `INCONCLUSIVE` - Inconclusive
+        * `WITHDRAWN_BY_COMPLAINANT` - Withdrawn by complainant
+        * `NO_FURTHER_ACTION_REQUIRED` - No further action required
     Department:
       type: object
       properties:
@@ -1334,6 +1418,80 @@ components:
       - full_name
       - id
       - job_title
+    FollowUp:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        scheduled_date:
+          type: string
+          format: date
+          readOnly: true
+        kind:
+          allOf:
+          - $ref: '#/components/schemas/KindEnum'
+          readOnly: true
+        reminder_enabled:
+          type: boolean
+          readOnly: true
+        reminder_time:
+          type: string
+          format: time
+          readOnly: true
+          nullable: true
+        completed_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        outcome_notes:
+          type: string
+          readOnly: true
+      required:
+      - completed_at
+      - id
+      - kind
+      - outcome_notes
+      - reminder_enabled
+      - reminder_time
+      - scheduled_date
+    FollowUpInputRequest:
+      type: object
+      properties:
+        scheduled_date:
+          type: string
+          format: date
+        kind:
+          allOf:
+          - $ref: '#/components/schemas/KindEnum'
+          default: CUSTOM
+        reminder_enabled:
+          type: boolean
+          default: true
+        reminder_time:
+          type: string
+          format: time
+          nullable: true
+      required:
+      - scheduled_date
+    FormalResolutionTypeEnum:
+      enum:
+      - FIRST_WRITTEN_WARNING
+      - SECOND_WRITTEN_WARNING
+      - FINAL_WRITTEN_WARNING
+      - SUSPENSION
+      - DISMISSAL
+      - OTHERS
+      type: string
+      description: |-
+        * `FIRST_WRITTEN_WARNING` - First written warning
+        * `SECOND_WRITTEN_WARNING` - Second written warning
+        * `FINAL_WRITTEN_WARNING` - Final written warning
+        * `SUSPENSION` - Suspension
+        * `DISMISSAL` - Dismissal
+        * `OTHERS` - Others
     FrequencyEnum:
       enum:
       - ONE_TIME
@@ -1342,6 +1500,20 @@ components:
       description: |-
         * `ONE_TIME` - One time
         * `REPEAT_BEHAVIOR` - Repeat behaviour
+    InformalResolutionTypeEnum:
+      enum:
+      - VERBAL_WARNING
+      - COACHING
+      - MEDIATION
+      - NO_ACTION_RESOLVED_WITHOUT_FORMAL_RECORD
+      - OTHERS
+      type: string
+      description: |-
+        * `VERBAL_WARNING` - Verbal warning
+        * `COACHING` - Coaching
+        * `MEDIATION` - Mediation
+        * `NO_ACTION_RESOLVED_WITHOUT_FORMAL_RECORD` - No action (resolved without formal record)
+        * `OTHERS` - Others
     InformationRequest:
       type: object
       description: 'The lead''s view: question plus the whole answer thread.'
@@ -1585,6 +1757,14 @@ components:
           default: OTHER
       required:
       - employee
+    KindEnum:
+      enum:
+      - TWO_WEEK_CHECKIN
+      - CUSTOM
+      type: string
+      description: |-
+        * `TWO_WEEK_CHECKIN` - Two week check-in
+        * `CUSTOM` - Custom
     Meeting:
       type: object
       properties:
@@ -1661,6 +1841,80 @@ components:
       - prompt
       - requested_at
       - requested_by
+    PIPInputRequest:
+      type: object
+      description: The optional PIP attached to a resolution.
+      properties:
+        start_date:
+          type: string
+          format: date
+        end_date:
+          type: string
+          format: date
+        trainings:
+          type: array
+          items:
+            type: string
+            format: uuid
+        follow_ups:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUpInputRequest'
+      required:
+      - end_date
+      - start_date
+    PIPPlan:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        employee:
+          allOf:
+          - $ref: '#/components/schemas/EmployeeBrief'
+          readOnly: true
+        start_date:
+          type: string
+          format: date
+          readOnly: true
+        end_date:
+          type: string
+          format: date
+          readOnly: true
+        state:
+          allOf:
+          - $ref: '#/components/schemas/PIPPlanStateEnum'
+          readOnly: true
+        trainings:
+          type: array
+          items:
+            type: object
+            additionalProperties: {}
+          readOnly: true
+        follow_ups:
+          type: array
+          items:
+            $ref: '#/components/schemas/FollowUp'
+          readOnly: true
+      required:
+      - employee
+      - end_date
+      - follow_ups
+      - id
+      - start_date
+      - state
+      - trainings
+    PIPPlanStateEnum:
+      enum:
+      - ACTIVE
+      - COMPLETED
+      - CANCELLED
+      type: string
+      description: |-
+        * `ACTIVE` - Active
+        * `COMPLETED` - Completed
+        * `CANCELLED` - Cancelled
     PaginatedComplaintListList:
       type: object
       required:
@@ -1807,6 +2061,110 @@ components:
           nullable: true
       required:
       - prompt
+    Resolution:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        decision:
+          allOf:
+          - $ref: '#/components/schemas/DecisionEnum'
+          readOnly: true
+        decision_display:
+          type: string
+          readOnly: true
+        resolution_type:
+          allOf:
+          - $ref: '#/components/schemas/ResolutionTypeEnum'
+          readOnly: true
+        formal_resolution_type:
+          allOf:
+          - $ref: '#/components/schemas/FormalResolutionTypeEnum'
+          readOnly: true
+        informal_resolution_type:
+          allOf:
+          - $ref: '#/components/schemas/InformalResolutionTypeEnum'
+          readOnly: true
+        resolution_note:
+          type: string
+          readOnly: true
+          description: Required when either sub-type is OTHERS.
+        decision_notes:
+          type: string
+          readOnly: true
+        decided_by:
+          allOf:
+          - $ref: '#/components/schemas/EmployeeBrief'
+          readOnly: true
+        decided_at:
+          type: string
+          format: date-time
+          readOnly: true
+        pip_plan:
+          allOf:
+          - $ref: '#/components/schemas/PIPPlan'
+          readOnly: true
+      required:
+      - decided_at
+      - decided_by
+      - decision
+      - decision_display
+      - decision_notes
+      - formal_resolution_type
+      - id
+      - informal_resolution_type
+      - pip_plan
+      - resolution_note
+      - resolution_type
+    ResolutionTypeEnum:
+      enum:
+      - FORMAL
+      - INFORMAL
+      - NO_RESOLUTION_REQUIRED
+      type: string
+      description: |-
+        * `FORMAL` - Formal resolution
+        * `INFORMAL` - Informal resolution
+        * `NO_RESOLUTION_REQUIRED` - No resolution required
+    ResolveComplaintRequest:
+      type: object
+      description: |-
+        HR's decision, and everything that follows from it.
+
+        The conditional rules here mirror check constraints on the Resolution
+        table. That duplication is intentional -- the constraint guarantees the
+        data is sound, but reaching it means a 500. This layer turns the same rule
+        into a field error.
+      properties:
+        decision:
+          $ref: '#/components/schemas/DecisionEnum'
+        resolution_type:
+          $ref: '#/components/schemas/ResolutionTypeEnum'
+        formal_resolution_type:
+          oneOf:
+          - $ref: '#/components/schemas/FormalResolutionTypeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        informal_resolution_type:
+          oneOf:
+          - $ref: '#/components/schemas/InformalResolutionTypeEnum'
+          - $ref: '#/components/schemas/BlankEnum'
+        resolution_note:
+          type: string
+          maxLength: 5000
+        decision_notes:
+          type: string
+          minLength: 1
+          maxLength: 20000
+        pip:
+          allOf:
+          - $ref: '#/components/schemas/PIPInputRequest'
+          nullable: true
+      required:
+      - decision
+      - decision_notes
+      - resolution_type
     RespondToRequestRequest:
       type: object
       properties:

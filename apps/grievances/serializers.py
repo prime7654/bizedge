@@ -12,7 +12,7 @@ from django.conf import settings
 from django.db.models import Q
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
-from apps.directory.models import Department, Employee
+from apps.directory.models import Department, Employee, Training
 from apps.grievances import enums
 from apps.grievances.access import AccessLevel, ComplaintAccessPolicy
 from apps.grievances.models import (
@@ -25,6 +25,9 @@ from apps.grievances.models import (
     Investigation,
     InvestigationMeeting,
     InvestigationNote,
+    PIPFollowUp,
+    PIPPlan,
+    Resolution,
 )
 
 
@@ -318,6 +321,7 @@ class ComplaintDetailSerializer(ComplaintListSerializer):
     filed_by = EmployeeBriefSerializer(read_only=True)
     available_transitions = serializers.SerializerMethodField()
     investigation = serializers.SerializerMethodField()
+    resolution = serializers.SerializerMethodField()
 
     @extend_schema_field(serializers.ListField(child=serializers.CharField()))
     def get_available_transitions(self, obj):
@@ -335,12 +339,23 @@ class ComplaintDetailSerializer(ComplaintListSerializer):
         current = obj.current_investigation
         return InvestigationSerializer(current).data if current else None
 
+    @extend_schema_field(serializers.DictField(allow_null=True))
+    def get_resolution(self, obj):
+        """The decision on the current round, if one has been made."""
+        current = obj.current_investigation
+        resolution = getattr(current, "resolution", None) if current else None
+        if resolution is None:
+            return None
+        from apps.grievances.serializers import ResolutionSerializer
+
+        return ResolutionSerializer(resolution).data
+
     class Meta(ComplaintListSerializer.Meta):
         fields = ComplaintListSerializer.Meta.fields + (
             "description", "incident_date", "frequency", "occurrence_count",
             "filed_by", "witnesses", "attachments", "visibility_requested",
             "complainant_identity_released", "available_transitions",
-            "investigation",
+            "investigation", "resolution",
         )
         read_only_fields = fields
 
@@ -613,3 +628,167 @@ class InvestigationDetailSerializer(InvestigationSerializer):
             "requested_by", "collaborator__employee"
         ).prefetch_related("responses__responded_by")
         return InformationRequestSerializer(queryset, many=True).data
+
+
+# ---------------------------------------------------------------------------
+# Decision and resolution
+# ---------------------------------------------------------------------------
+
+
+class FollowUpInputSerializer(serializers.Serializer):
+    scheduled_date = serializers.DateField()
+    kind = serializers.ChoiceField(
+        choices=enums.FollowUpKind.choices, default=enums.FollowUpKind.CUSTOM
+    )
+    reminder_enabled = serializers.BooleanField(default=True)
+    reminder_time = serializers.TimeField(required=False, allow_null=True)
+
+
+class PIPInputSerializer(serializers.Serializer):
+    """The optional PIP attached to a resolution."""
+
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    trainings = serializers.PrimaryKeyRelatedField(
+        queryset=Training.objects.none(), many=True, required=False
+    )
+    follow_ups = FollowUpInputSerializer(many=True, required=False)
+
+    def get_fields(self):
+        fields = super().get_fields()
+        organisation_id = self.context.get("organisation_id")
+        if organisation_id is not None:
+            fields["trainings"].child_relation.queryset = Training.objects.filter(
+                organisation_id=organisation_id, is_active=True
+            )
+        return fields
+
+    def validate(self, attrs):
+        if attrs["end_date"] < attrs["start_date"]:
+            raise serializers.ValidationError(
+                {"end_date": "The PIP cannot end before it starts."}
+            )
+        return attrs
+
+
+class ResolveComplaintSerializer(serializers.Serializer):
+    """HR's decision, and everything that follows from it.
+
+    The conditional rules here mirror check constraints on the Resolution
+    table. That duplication is intentional -- the constraint guarantees the
+    data is sound, but reaching it means a 500. This layer turns the same rule
+    into a field error.
+    """
+
+    decision = serializers.ChoiceField(choices=enums.InvestigationDecision.choices)
+    resolution_type = serializers.ChoiceField(choices=enums.ResolutionType.choices)
+    formal_resolution_type = serializers.ChoiceField(
+        choices=enums.FormalResolutionType.choices, required=False, allow_blank=True
+    )
+    informal_resolution_type = serializers.ChoiceField(
+        choices=enums.InformalResolutionType.choices, required=False, allow_blank=True
+    )
+    resolution_note = serializers.CharField(
+        required=False, allow_blank=True, max_length=5000
+    )
+    decision_notes = serializers.CharField(max_length=20000)
+    pip = PIPInputSerializer(required=False, allow_null=True)
+
+    def validate_decision_notes(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError(
+                "Record why this decision was reached."
+            )
+        return value
+
+    def validate(self, attrs):
+        errors: dict[str, str] = {}
+        resolution_type = attrs["resolution_type"]
+        formal = attrs.get("formal_resolution_type") or ""
+        informal = attrs.get("informal_resolution_type") or ""
+
+        if resolution_type == enums.ResolutionType.FORMAL:
+            if not formal:
+                errors["formal_resolution_type"] = (
+                    "Select the type of formal resolution."
+                )
+            if informal:
+                errors["informal_resolution_type"] = (
+                    "Leave this blank for a formal resolution."
+                )
+        elif resolution_type == enums.ResolutionType.INFORMAL:
+            if not informal:
+                errors["informal_resolution_type"] = (
+                    "Select the type of informal resolution."
+                )
+            if formal:
+                errors["formal_resolution_type"] = (
+                    "Leave this blank for an informal resolution."
+                )
+        else:
+            if formal:
+                errors["formal_resolution_type"] = "Leave this blank."
+            if informal:
+                errors["informal_resolution_type"] = "Leave this blank."
+
+        chose_others = (
+            formal == enums.FormalResolutionType.OTHERS
+            or informal == enums.InformalResolutionType.OTHERS
+        )
+        if chose_others and not (attrs.get("resolution_note") or "").strip():
+            errors["resolution_note"] = "Describe the resolution."
+
+        if errors:
+            raise serializers.ValidationError(errors)
+        return attrs
+
+
+class FollowUpSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PIPFollowUp
+        fields = (
+            "id", "scheduled_date", "kind", "reminder_enabled",
+            "reminder_time", "completed_at", "outcome_notes",
+        )
+        read_only_fields = fields
+
+
+class PIPPlanSerializer(serializers.ModelSerializer):
+    employee = EmployeeBriefSerializer(read_only=True)
+    follow_ups = FollowUpSerializer(many=True, read_only=True)
+    trainings = serializers.SerializerMethodField()
+
+    class Meta:
+        model = PIPPlan
+        fields = (
+            "id", "employee", "start_date", "end_date", "state",
+            "trainings", "follow_ups",
+        )
+        read_only_fields = fields
+
+    @extend_schema_field(serializers.ListField(child=serializers.DictField()))
+    def get_trainings(self, obj):
+        return [
+            {"id": str(a.training_id), "name": a.training.name,
+             "completed_at": a.completed_at}
+            for a in obj.training_assignments.select_related("training")
+        ]
+
+
+class ResolutionSerializer(serializers.ModelSerializer):
+    decided_by = EmployeeBriefSerializer(read_only=True)
+    pip_plan = PIPPlanSerializer(read_only=True)
+    decision_display = serializers.CharField(
+        source="get_decision_display", read_only=True
+    )
+
+    class Meta:
+        model = Resolution
+        fields = (
+            "id", "decision", "decision_display", "resolution_type",
+            "formal_resolution_type", "informal_resolution_type",
+            "resolution_note", "decision_notes", "decided_by", "decided_at",
+            "pip_plan",
+        )
+        read_only_fields = fields

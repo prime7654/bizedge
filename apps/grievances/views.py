@@ -34,6 +34,8 @@ from apps.grievances.permissions import CanViewComplaint, IsEmployee, IsHR
 from apps.grievances.serializers import (
     AppointInvestigatorSerializer,
     InvestigationSerializer,
+    ResolutionSerializer,
+    ResolveComplaintSerializer,
     AttachmentSerializer,
     ComplaintEventSerializer,
     ComplaintCreateSerializer,
@@ -45,6 +47,7 @@ from apps.grievances.services import ServiceError, file_complaint
 from apps.grievances.services import (
     appoint_investigator as appoint_investigator_service,
 )
+from apps.grievances.services import resolve_complaint as resolve_complaint_service
 from apps.grievances.transitions import TransitionError
 
 
@@ -395,3 +398,89 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
             "collaborators__employee"
         ).order_by("round")
         return Response(InvestigationSerializer(rounds, many=True).data)
+
+    @extend_schema(
+        request=ResolveComplaintSerializer,
+        responses={200: ComplaintDetailSerializer},
+        description=(
+            "Record the decision and close the case. HR only. One call: the "
+            "resolution, any PIP, its training assignments and its follow-up "
+            "schedule are created together or not at all. Returns 409 if the "
+            "case has already been resolved."
+        ),
+    )
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="resolution",
+        permission_classes=[IsEmployee, IsHR, CanViewComplaint],
+        filter_backends=[],
+    )
+    def resolve(self, request, pk=None):
+        complaint = self.get_object()
+        employee = employee_for(request.user)
+
+        serializer = ResolveComplaintSerializer(
+            data=request.data, context=self.get_serializer_context()
+        )
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        pip = data.get("pip")
+        if pip:
+            # PrimaryKeyRelatedField already resolved these to model instances.
+            pip = {
+                "start_date": pip["start_date"],
+                "end_date": pip["end_date"],
+                "trainings": list(pip.get("trainings", [])),
+                "follow_ups": list(pip.get("follow_ups", [])),
+            }
+
+        try:
+            resolve_complaint_service(
+                complaint=complaint,
+                actor=employee,
+                decision=data["decision"],
+                resolution_type=data["resolution_type"],
+                formal_resolution_type=data.get("formal_resolution_type", ""),
+                informal_resolution_type=data.get("informal_resolution_type", ""),
+                resolution_note=data.get("resolution_note", ""),
+                decision_notes=data["decision_notes"],
+                pip=pip,
+                request=request,
+            )
+        except TransitionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ServiceError as exc:
+            raise ValidationError({"detail": str(exc)}) from exc
+
+        complaint.refresh_from_db()
+        return Response(
+            ComplaintDetailSerializer(
+                complaint, context=self.get_serializer_context()
+            ).data
+        )
+
+    @extend_schema(
+        responses={200: ResolutionSerializer(many=True)},
+        description="Decisions on this complaint, one per investigation round.",
+    )
+    @action(detail=True, methods=["get"], filter_backends=[], pagination_class=None)
+    def resolutions(self, request, pk=None):
+        """Every decision, including superseded ones from earlier rounds.
+
+        A reopened case keeps its previous resolution intact -- the record has
+        to show what was decided the first time and on what basis.
+        """
+        complaint = self.get_object()
+        employee = employee_for(request.user)
+
+        if ComplaintAccessPolicy.access_level(complaint, employee) is not AccessLevel.FULL:
+            raise PermissionDenied(_("You cannot view the decision on this complaint."))
+
+        rounds = complaint.resolutions.select_related(
+            "decided_by", "pip_plan__employee"
+        ).prefetch_related(
+            "pip_plan__follow_ups", "pip_plan__training_assignments__training"
+        ).order_by("decided_at")
+        return Response(ResolutionSerializer(rounds, many=True).data)

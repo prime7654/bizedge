@@ -25,6 +25,10 @@ from apps.grievances.models import (
     Investigation,
     InvestigationCollaborator,
     InvestigationMeeting,
+    PIPFollowUp,
+    PIPPlan,
+    PIPTrainingAssignment,
+    Resolution,
 )
 from apps.grievances.references import next_reference
 
@@ -698,3 +702,218 @@ def _hr_recipients(complaint: Complaint) -> list:
             organisation_id=complaint.organisation_id, is_hr=True, is_active=True
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# Decision and resolution
+# ---------------------------------------------------------------------------
+
+MAX_DECISION_NOTES_CHARS = 20_000
+
+#: A PIP running longer than this is almost certainly a typo in the year.
+MAX_PIP_DAYS = 730
+
+
+def _validate_resolution_shape(
+    *, resolution_type: str, formal_type: str, informal_type: str, note: str
+) -> None:
+    """Enforce the formal/informal rules before touching the database.
+
+    These mirror check constraints on the Resolution table. Duplicating them
+    here is deliberate: the constraint is the backstop that guarantees the data
+    is sound, but hitting it produces an IntegrityError and a 500. Callers
+    deserve a field error instead.
+    """
+    if resolution_type == enums.ResolutionType.FORMAL:
+        if not formal_type:
+            raise ServiceError("Select the type of formal resolution.")
+        if informal_type:
+            raise ServiceError(
+                "A formal resolution cannot also carry an informal type."
+            )
+    elif resolution_type == enums.ResolutionType.INFORMAL:
+        if not informal_type:
+            raise ServiceError("Select the type of informal resolution.")
+        if formal_type:
+            raise ServiceError(
+                "An informal resolution cannot also carry a formal type."
+            )
+    elif resolution_type == enums.ResolutionType.NO_RESOLUTION_REQUIRED:
+        if formal_type or informal_type:
+            raise ServiceError(
+                "No resolution required means no resolution type is set."
+            )
+    else:
+        raise ServiceError(f"Unknown resolution type: {resolution_type!r}")
+
+    chose_others = enums.FormalResolutionType.OTHERS in (formal_type,) or (
+        enums.InformalResolutionType.OTHERS == informal_type
+    )
+    if chose_others and not (note or "").strip():
+        raise ServiceError("Describe the resolution when choosing 'Others'.")
+
+
+@transaction.atomic
+def resolve_complaint(
+    *,
+    complaint: Complaint,
+    actor,
+    decision: str,
+    resolution_type: str,
+    decision_notes: str,
+    formal_resolution_type: str = "",
+    informal_resolution_type: str = "",
+    resolution_note: str = "",
+    pip: dict | None = None,
+    request=None,
+) -> Resolution:
+    """Record HR's decision and close the case.
+
+    One call, one transaction. The alternative -- letting the client create the
+    resolution, then the PIP, then the follow-ups -- means a network drop
+    halfway leaves a PIP attached to a complaint that is still open, and
+    nothing in the system to say which half ran.
+
+    ``pip`` is optional and shaped::
+
+        {"start_date": ..., "end_date": ...,
+         "trainings": [<Training>, ...],
+         "follow_ups": [{"scheduled_date": ..., "kind": ...,
+                         "reminder_enabled": bool, "reminder_time": ...}]}
+    """
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+    transition = transitions.check(complaint, "resolve")
+
+    # An HR user named in the complaint must not be the one deciding it.
+    _assert_no_conflict(complaint, actor, None)
+
+    investigation = complaint.investigations.order_by("-round").first()
+    if investigation is None:
+        # Should be unreachable given the state machine, but the invariant is
+        # worth asserting: Q4 requires an investigator on record before close.
+        raise ServiceError(
+            "This complaint has no investigation on record and cannot be closed."
+        )
+    if hasattr(investigation, "resolution"):
+        raise transitions.TransitionError(
+            "This investigation round has already been resolved."
+        )
+
+    if decision not in enums.InvestigationDecision.values:
+        raise ServiceError(f"Unknown investigation decision: {decision!r}")
+
+    _validate_resolution_shape(
+        resolution_type=resolution_type,
+        formal_type=formal_resolution_type,
+        informal_type=informal_resolution_type,
+        note=resolution_note,
+    )
+    decision_notes = _require_text(
+        decision_notes, "Decision notes", MAX_DECISION_NOTES_CHARS
+    )
+
+    previous_state = complaint.state
+
+    resolution = Resolution.objects.create(
+        complaint=complaint,
+        investigation=investigation,
+        decision=decision,
+        resolution_type=resolution_type,
+        formal_resolution_type=formal_resolution_type,
+        informal_resolution_type=informal_resolution_type,
+        resolution_note=(resolution_note or "").strip(),
+        decision_notes=decision_notes,
+        decided_by=actor,
+    )
+
+    if pip:
+        _create_pip(resolution=resolution, complaint=complaint, actor=actor, spec=pip)
+
+    complaint.state = transition.target
+    complaint.updated_by = actor
+    complaint.save(update_fields=["state", "updated_by", "updated_at"])
+
+    record_event(
+        complaint,
+        verb=enums.EventVerb.RESOLVED,
+        actor=actor,
+        from_state=previous_state,
+        to_state=complaint.state,
+        payload={
+            "decision": decision,
+            "resolution_type": resolution_type,
+            "formal_resolution_type": formal_resolution_type,
+            "informal_resolution_type": informal_resolution_type,
+            "pip_created": bool(pip),
+        },
+        request=request,
+    )
+
+    # The respondent learns the outcome; the complainant learns it closed.
+    # Both are notified, neither is told anything the other said.
+    notifications.notify(
+        notifications.COMPLAINT_RESOLVED,
+        complaint,
+        [e for e in (complaint.complainant, complaint.respondent) if e is not None],
+        reference=complaint.reference,
+        decision=decision,
+    )
+    return resolution
+
+
+def _create_pip(*, resolution: Resolution, complaint: Complaint, actor, spec: dict):
+    """Build the PIP, its training assignments and its follow-up schedule.
+
+    Runs inside the caller's transaction, so a bad follow-up date rolls the
+    whole close back rather than leaving a half-built plan behind.
+    """
+    employee = complaint.respondent
+    if employee is None:
+        raise ServiceError(
+            "A performance improvement plan needs someone to apply to, and this "
+            "complaint does not name a respondent."
+        )
+
+    start = _coerce_date(spec.get("start_date"))
+    end = _coerce_date(spec.get("end_date"))
+    if start is None or end is None:
+        raise ServiceError("A PIP needs both a start and an end date.")
+    if end < start:
+        raise ServiceError("The PIP cannot end before it starts.")
+    if (end - start).days > MAX_PIP_DAYS:
+        raise ServiceError(
+            f"A PIP cannot run longer than {MAX_PIP_DAYS} days "
+            f"(got {(end - start).days})."
+        )
+
+    plan = PIPPlan.objects.create(
+        resolution=resolution,
+        employee=employee,
+        start_date=start,
+        end_date=end,
+        state=enums.PIPState.ACTIVE,
+        created_by=actor,
+    )
+
+    for training in spec.get("trainings") or []:
+        if training.organisation_id != complaint.organisation_id:
+            raise ServiceError("That training is not available in this organisation.")
+        PIPTrainingAssignment.objects.create(pip_plan=plan, training=training)
+
+    for follow_up in spec.get("follow_ups") or []:
+        scheduled = _coerce_date(follow_up.get("scheduled_date"))
+        if scheduled is None:
+            raise ServiceError("Each follow-up needs a date.")
+        if scheduled < start:
+            raise ServiceError(
+                f"A follow-up on {scheduled} falls before the PIP starts on {start}."
+            )
+        PIPFollowUp.objects.create(
+            pip_plan=plan,
+            scheduled_date=scheduled,
+            kind=follow_up.get("kind") or enums.FollowUpKind.CUSTOM,
+            reminder_enabled=bool(follow_up.get("reminder_enabled", True)),
+            reminder_time=follow_up.get("reminder_time"),
+        )
+
+    return plan
