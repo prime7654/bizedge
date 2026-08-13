@@ -185,7 +185,26 @@ nobody for the plan to apply to.
 
 Resolving an already-resolved case returns **409**.
 
-## 14. Not built yet
+## 14. Withdrawal behaves differently depending on timing
+
+`POST /complaints/{id}/withdraw/` takes one of two paths:
+
+- **Before an investigation opens** — the case closes immediately as
+  `WITHDRAWN`.
+- **During an investigation** — the case does *not* close. It moves to
+  `AWAITING_DECISION` with the request recorded, and HR closes it with a
+  `WITHDRAWN_BY_COMPLAINANT` decision. A withdrawn complaint may still need
+  investigating on the company's behalf, so HR keeps the final say.
+
+Check `state` on the response rather than assuming the case is closed.
+
+Only the complainant or HR may withdraw. **The respondent never can**, even if
+they are also HR. Expect 403 — or 404 before the investigation opens, since the
+complaint is not visible to them at all yet.
+
+Once the case is awaiting a decision or already closed, withdrawal returns 409.
+
+## 15. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
@@ -199,8 +218,10 @@ meetings, notes and report submission.
 
 Decision and resolution is now available, including PIP creation.
 
-Still to come: withdrawal, the PIP follow-up reminders (they need a scheduled
-task runner), and reopening.
+Withdrawal is now available too.
+
+Still to come: PIP follow-up reminders (they need a scheduled task runner) and
+reopening.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be
 progressed — who acts on those is an open product question.

@@ -384,6 +384,44 @@ paths:
                 items:
                   $ref: '#/components/schemas/ComplaintEvent'
           description: ''
+  /api/v1/complaints/{id}/withdraw/:
+    post:
+      operationId: v1_complaints_withdraw_create
+      description: Retract a complaint. Before an investigation this closes the case
+        outright. During one it records the request and hands the case to HR, who
+        close it with a `WITHDRAWN_BY_COMPLAINANT` decision -- a withdrawn complaint
+        may still need investigating on the company's behalf. Returns 409 once the
+        case is awaiting a decision or closed.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this complaint.
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WithdrawComplaintRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/WithdrawComplaintRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/WithdrawComplaintRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ComplaintDetail'
+          description: ''
   /api/v1/complaints/metadata/:
     get:
       operationId: v1_complaints_metadata_retrieve
@@ -2295,6 +2333,13 @@ components:
         * `HR` - HR only
         * `LINE_MANAGER` - Line manager only
         * `BOTH` - HR and line manager
+    WithdrawComplaintRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          description: Optional. Recorded on the case history.
+          maxLength: 2000
     WitnessInputRequest:
       type: object
       description: |-

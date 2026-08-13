@@ -36,6 +36,7 @@ from apps.grievances.serializers import (
     InvestigationSerializer,
     ResolutionSerializer,
     ResolveComplaintSerializer,
+    WithdrawComplaintSerializer,
     AttachmentSerializer,
     ComplaintEventSerializer,
     ComplaintCreateSerializer,
@@ -48,6 +49,7 @@ from apps.grievances.services import (
     appoint_investigator as appoint_investigator_service,
 )
 from apps.grievances.services import resolve_complaint as resolve_complaint_service
+from apps.grievances.services import withdraw_complaint as withdraw_complaint_service
 from apps.grievances.transitions import TransitionError
 
 
@@ -484,3 +486,40 @@ class ComplaintViewSet(viewsets.ReadOnlyModelViewSet):
             "pip_plan__follow_ups", "pip_plan__training_assignments__training"
         ).order_by("decided_at")
         return Response(ResolutionSerializer(rounds, many=True).data)
+
+    @extend_schema(
+        request=WithdrawComplaintSerializer,
+        responses={200: ComplaintDetailSerializer},
+        description=(
+            "Retract a complaint. Before an investigation this closes the case "
+            "outright. During one it records the request and hands the case to "
+            "HR, who close it with a `WITHDRAWN_BY_COMPLAINANT` decision -- a "
+            "withdrawn complaint may still need investigating on the company's "
+            "behalf. Returns 409 once the case is awaiting a decision or closed."
+        ),
+    )
+    @action(detail=True, methods=["post"], filter_backends=[])
+    def withdraw(self, request, pk=None):
+        complaint = self.get_object()
+        serializer = WithdrawComplaintSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            withdraw_complaint_service(
+                complaint=complaint,
+                actor=employee_for(request.user),
+                reason=serializer.validated_data.get("reason", ""),
+                request=request,
+            )
+        except TransitionError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+        except ServiceError as exc:
+            # Not authorised to withdraw is a 403, not a validation failure.
+            return Response({"detail": str(exc)}, status=status.HTTP_403_FORBIDDEN)
+
+        complaint.refresh_from_db()
+        return Response(
+            ComplaintDetailSerializer(
+                complaint, context=self.get_serializer_context()
+            ).data
+        )

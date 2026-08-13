@@ -75,7 +75,7 @@ line-manager visibility of a complaint against themselves.
 - [x] 5 — State machine, triage, due date, respondent visibility
 - [x] 6 — Investigation
 - [x] 7 — Decision & resolution
-- [ ] 8 — Withdrawal, both paths
+- [x] 8 — Withdrawal, both paths
 - [ ] 9 — PIP, follow-ups, Celery reminders
 - [ ] 10 — Reopen
 - [ ] 11 — Soft delete authorization
@@ -110,6 +110,7 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `POST` | `/api/v1/me/information-requests/{id}/respond/` | Answer a question |
 | `POST` | `/api/v1/complaints/{id}/resolution/` | Decide and close — one transactional call |
 | `GET` | `/api/v1/complaints/{id}/resolutions/` | Decisions, one per round |
+| `POST` | `/api/v1/complaints/{id}/withdraw/` | Retract — complainant or HR only |
 
 **Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
 `source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,

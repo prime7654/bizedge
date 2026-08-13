@@ -792,3 +792,12 @@ class ResolutionSerializer(serializers.ModelSerializer):
             "pip_plan",
         )
         read_only_fields = fields
+
+
+class WithdrawComplaintSerializer(serializers.Serializer):
+    reason = serializers.CharField(
+        required=False,
+        allow_blank=True,
+        max_length=2000,
+        help_text="Optional. Recorded on the case history.",
+    )

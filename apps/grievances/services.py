@@ -917,3 +917,110 @@ def _create_pip(*, resolution: Resolution, complaint: Complaint, actor, spec: di
         )
 
     return plan
+
+
+# ---------------------------------------------------------------------------
+# Withdrawal
+# ---------------------------------------------------------------------------
+
+MAX_WITHDRAWAL_REASON_CHARS = 2_000
+
+
+def can_withdraw(complaint: Complaint, employee) -> bool:
+    """Whether ``employee`` may retract ``complaint``.
+
+    The complainant, or HR. Explicitly **not** the respondent: letting the
+    person a complaint is about make it go away is the failure mode this whole
+    module exists to prevent.
+
+    For a company-filed complaint there is no complainant, so only HR can.
+    """
+    if employee is None:
+        return False
+    if complaint.organisation_id != employee.organisation_id:
+        return False
+    if complaint.respondent_id == employee.pk:
+        return False
+    if complaint.complainant_id == employee.pk:
+        return True
+    return bool(getattr(employee, "is_hr", False))
+
+
+@transaction.atomic
+def withdraw_complaint(
+    *, complaint: Complaint, actor, reason: str = "", request=None
+) -> Complaint:
+    """Retract a complaint.
+
+    Two paths, chosen by where the case has got to:
+
+    * **Before an investigation** (B1) -- closes outright as ``WITHDRAWN``. No
+      investigator, no decision to record.
+    * **During an investigation** -- does *not* close the case. It moves to
+      ``AWAITING_DECISION`` with the request recorded, and HR closes it with
+      ``WITHDRAWN_BY_COMPLAINANT``. HR keeps the final say because a withdrawn
+      harassment complaint may still need investigating on the company's
+      behalf.
+
+    Once the case is already awaiting a decision or closed, there is nothing
+    left to withdraw.
+    """
+    complaint = Complaint.objects.select_for_update().get(pk=complaint.pk)
+
+    if not can_withdraw(complaint, actor):
+        raise ServiceError("You cannot withdraw this complaint.")
+
+    reason = (reason or "").strip()[:MAX_WITHDRAWAL_REASON_CHARS]
+    previous_state = complaint.state
+    now = timezone.now()
+
+    if complaint.state == enums.ComplaintState.SUBMITTED:
+        transition = transitions.check(complaint, "withdraw_before_investigation")
+        verb = enums.EventVerb.WITHDRAWN
+    else:
+        # Raises for AWAITING_DECISION, RESOLVED and WITHDRAWN.
+        transition = transitions.check(complaint, "request_withdrawal")
+        verb = enums.EventVerb.WITHDRAWAL_REQUESTED
+
+    complaint.state = transition.target
+    complaint.withdrawal_requested_at = now
+    complaint.withdrawal_requested_by = actor
+    complaint.updated_by = actor
+    complaint.save(
+        update_fields=[
+            "state", "withdrawal_requested_at", "withdrawal_requested_by",
+            "updated_by", "updated_at",
+        ]
+    )
+
+    # Nothing further is expected from anyone once a withdrawal is in.
+    current = complaint.investigations.order_by("-round").first()
+    if current is not None:
+        InformationRequest.objects.filter(
+            investigation=current, status=enums.InformationRequestStatus.PENDING
+        ).update(status=enums.InformationRequestStatus.EXPIRED)
+
+    record_event(
+        complaint,
+        verb=verb,
+        actor=actor,
+        from_state=previous_state,
+        to_state=complaint.state,
+        payload={"reason": reason} if reason else {},
+        request=request,
+    )
+
+    # HR always hears about it. Before an investigation there is nobody else to
+    # tell; during one, the lead needs to know to stop.
+    recipients = _hr_recipients(complaint)
+    if current is not None:
+        recipients.append(current.lead)
+
+    notifications.notify(
+        notifications.COMPLAINT_WITHDRAWN,
+        complaint,
+        recipients,
+        reference=complaint.reference,
+        closed_outright=complaint.state == enums.ComplaintState.WITHDRAWN,
+    )
+    return complaint
