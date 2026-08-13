@@ -149,6 +149,9 @@ implementations of one rule, and drift between them is a leak.
 
 ## Code standards
 
+See `CLAUDE.md` for the full standard, architecture rules and domain gotchas —
+read it before writing code here.
+
 This project follows the `robust-code` practice. In short: handle the input
 nobody pictured, fail loudly at the boundary, and never swallow an error you
 cannot act on.
