@@ -17,6 +17,10 @@ RUN pip install --no-cache-dir -r requirements-dev.txt
 
 COPY . .
 
+# git does not always preserve the executable bit on checkout, so set it here
+# rather than relying on the repo.
+RUN chmod +x /app/scripts/*.sh
+
 # Collected at build time so the web process starts serving immediately.
 # DEBUG and a dummy key are set only for this command -- collectstatic does not
 # touch the database, and prod settings refuse to import without a host.
@@ -27,5 +31,4 @@ EXPOSE 8000
 
 # Compose overrides this for local development. Render supplies its own command
 # via render.yaml, which also runs migrations first.
-CMD ["gunicorn", "config.wsgi:application", "--bind", "0.0.0.0:8000", \
-     "--workers", "2", "--timeout", "60", "--access-logfile", "-"]
+CMD ["/app/scripts/start.sh"]

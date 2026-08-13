@@ -23,10 +23,10 @@ services:
     name: bizedge-grievances-api
     runtime: docker
     dockerfilePath: ./Dockerfile
-    dockerCommand: >-
-      sh -c "python manage.py migrate --noinput &&
-      gunicorn config.wsgi:application --bind 0.0.0.0:$PORT
-      --workers 2 --timeout 60 --access-logfile -"
+    # A script, not an inline command. Render hands dockerCommand to a shell,
+    # so an inline "sh -c ..." ends up being treated as one binary name and
+    # fails at boot with a bare "not found".
+    dockerCommand: /app/scripts/start.sh
     plan: free
     healthCheckPath: /api/schema/
     envVars:
