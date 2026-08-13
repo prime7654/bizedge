@@ -13,3 +13,7 @@ staticfiles/
 *.log
 build.log
 build.err
+
+# Celery beat runtime state
+celerybeat-schedule
+celerybeat.pid
