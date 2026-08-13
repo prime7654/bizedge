@@ -934,6 +934,103 @@ paths:
                 type: object
                 additionalProperties: {}
           description: ''
+  /api/v1/pips/:
+    get:
+      operationId: v1_pips_list
+      description: Performance improvement plans.
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - v1
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedPIPPlanList'
+          description: ''
+  /api/v1/pips/{id}/:
+    get:
+      operationId: v1_pips_retrieve
+      description: Performance improvement plans.
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this pip plan.
+        required: true
+      tags:
+      - v1
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PIPPlan'
+          description: ''
+  /api/v1/pips/{id}/follow-ups/{follow_up_id}/complete/:
+    post:
+      operationId: v1_pips_follow_ups_complete_create
+      description: Mark a check-in complete. Completing the last outstanding one closes
+        the plan.
+      parameters:
+      - in: path
+        name: follow_up_id
+        schema:
+          type: string
+        required: true
+      - in: path
+        name: id
+        schema:
+          type: string
+          format: uuid
+        description: A UUID string identifying this pip plan.
+        required: true
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CompleteFollowUpRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/CompleteFollowUpRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/CompleteFollowUpRequest'
+      security:
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FollowUp'
+          description: ''
   /api/v1/trainings/:
     get:
       operationId: v1_trainings_list
@@ -1441,6 +1538,12 @@ components:
       - employee
       - id
       - witness_type
+    CompleteFollowUpRequest:
+      type: object
+      properties:
+        outcome_notes:
+          type: string
+          maxLength: 20000
     DecisionEnum:
       enum:
       - SUBSTANTIATED
@@ -2114,6 +2217,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/MyInformationRequest'
+    PaginatedPIPPlanList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/PIPPlan'
     PaginatedTrainingList:
       type: object
       required:

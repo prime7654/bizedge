@@ -828,3 +828,9 @@ class ReopenComplaintSerializer(serializers.Serializer):
         if lead is None:
             raise serializers.ValidationError("No such employee in this organisation.")
         return lead
+
+
+class CompleteFollowUpSerializer(serializers.Serializer):
+    outcome_notes = serializers.CharField(
+        required=False, allow_blank=True, max_length=20000
+    )

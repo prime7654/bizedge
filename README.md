@@ -76,7 +76,7 @@ line-manager visibility of a complaint against themselves.
 - [x] 6 — Investigation
 - [x] 7 — Decision & resolution
 - [x] 8 — Withdrawal, both paths
-- [ ] 9 — PIP, follow-ups, Celery reminders
+- [x] 9 — PIP, follow-ups, reminders
 - [x] 10 — Reopen
 - [x] 11 — Soft delete authorization
 - [ ] 12 — LM-only triage — deferred, awaiting Product
@@ -113,6 +113,29 @@ Build step 2 before any endpoint. Retrofitting permissions is how leaks happen.
 | `POST` | `/api/v1/complaints/{id}/withdraw/` | Retract — complainant or HR only |
 | `POST` | `/api/v1/complaints/{id}/reopen/` | New round; previous round untouched |
 | `DELETE` | `/api/v1/complaints/{id}/` | Soft delete — HR creator, pre-investigation only |
+| `GET` | `/api/v1/pips/` | Performance improvement plans — HR only |
+| `POST` | `/api/v1/pips/{id}/follow-ups/{fid}/complete/` | Mark a check-in done |
+
+## Scheduled work
+
+One job, and it is the only part of this module not driven by a user action:
+
+```bash
+docker compose exec web python manage.py send_due_pip_reminders [--date YYYY-MM-DD] [--dry-run] [--limit N]
+```
+
+The logic lives in the management command, not in a Celery task, so it can be
+run and tested without a broker and the scheduler stays swappable. Celery Beat
+invokes it daily at 07:00 (`config/celery.py`); cron or a Kubernetes CronJob
+would do just as well.
+
+**Safe to run repeatedly.** Each reminder stamps `reminder_sent_at`, which
+drops the row out of the due queryset. Missing a day is also safe — check-ins
+are selected as scheduled *on or before* today, so a skipped run sends late
+rather than never.
+
+`beat` must run as a **single instance**. Two schedulers send every reminder
+twice.
 
 **Filters on the list endpoint:** `relation` (`reported_by_me` / `against_me`),
 `source_tab` (`employee` / `hr`), `status`, `stage`, `type`, `reported_to`,

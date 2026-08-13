@@ -226,7 +226,18 @@ It is a soft delete: the complaint disappears from lists and detail, but the
 record and its audit trail are retained. Whether permanent removal is ultimately
 required is still with HR Compliance.
 
-## 17. Not built yet
+## 17. PIPs are HR-only and outlive the complaint
+
+A PIP carries on after its complaint closes, so `/api/v1/pips/` is scoped by
+HR role rather than by complaint visibility. The employee under a plan cannot
+see or complete their own check-ins through the API.
+
+Completing the last outstanding check-in closes the plan automatically —
+re-read `state` rather than assuming it stays `ACTIVE`.
+
+Completing a check-in twice returns 400. The first outcome is kept.
+
+## 18. Not built yet
 
 Currently available: filing, listing, detail, attachments, timeline, metadata,
 summary, and the employee/department/training pickers.
@@ -244,9 +255,13 @@ Withdrawal is now available too.
 
 Reopening and deletion are now available.
 
-Still to come: PIP follow-up reminders, which need a scheduled task runner —
-the plans and their check-in schedules are created, but nothing sends the
-reminders yet.
+Everything in the workflow is now built: filing, triage, investigation,
+decision and resolution, PIPs and their reminders, withdrawal, reopening and
+deletion.
+
+The one gap is deliberate: complaints filed as `LINE_MANAGER` can be created
+and viewed but not progressed, because who acts on them is still an open
+product question.
 
 Complaints filed as `LINE_MANAGER` can be created and viewed, but cannot yet be
 progressed — who acts on those is an open product question.

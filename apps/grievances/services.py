@@ -1191,3 +1191,123 @@ def delete_complaint(*, complaint: Complaint, actor, request=None) -> Complaint:
         complaint.delete(deleted_by=actor)
 
     return complaint
+
+
+# ---------------------------------------------------------------------------
+# PIP follow-ups
+# ---------------------------------------------------------------------------
+
+MAX_OUTCOME_NOTES_CHARS = 20_000
+
+
+def can_manage_pip(plan: PIPPlan, employee) -> bool:
+    """HR owns PIPs.
+
+    The plan outlives the complaint that produced it, so access is not derived
+    from complaint visibility. The employee under the plan is deliberately not
+    included -- they can be told about it, but marking their own check-in
+    complete is not theirs to do.
+    """
+    if employee is None:
+        return False
+    if plan.employee.organisation_id != employee.organisation_id:
+        return False
+    return bool(getattr(employee, "is_hr", False))
+
+
+@transaction.atomic
+def complete_follow_up(
+    *, follow_up: PIPFollowUp, actor, outcome_notes: str = "", request=None
+) -> PIPFollowUp:
+    """Mark a check-in done.
+
+    Idempotent by state: completing twice raises rather than overwriting the
+    first outcome, which would quietly lose whatever was recorded.
+    """
+    follow_up = PIPFollowUp.objects.select_for_update().select_related(
+        "pip_plan__employee", "pip_plan__resolution__complaint"
+    ).get(pk=follow_up.pk)
+
+    if not can_manage_pip(follow_up.pip_plan, actor):
+        raise ServiceError("Only HR can complete a PIP check-in.")
+    if follow_up.completed_at is not None:
+        raise ServiceError("This check-in has already been completed.")
+
+    follow_up.completed_at = timezone.now()
+    follow_up.outcome_notes = (outcome_notes or "").strip()[
+        :MAX_OUTCOME_NOTES_CHARS
+    ]
+    follow_up.save(update_fields=["completed_at", "outcome_notes"])
+
+    plan = follow_up.pip_plan
+    if not plan.follow_ups.filter(completed_at__isnull=True).exists():
+        plan.state = enums.PIPState.COMPLETED
+        plan.save(update_fields=["state"])
+
+    record_event(
+        plan.resolution.complaint,
+        verb=enums.EventVerb.MEETING_RECORDED,
+        actor=actor,
+        payload={"pip_follow_up_id": str(follow_up.pk), "kind": follow_up.kind},
+        request=request,
+    )
+    return follow_up
+
+
+def due_follow_ups(*, on_date=None):
+    """Check-ins that need a reminder today.
+
+    Scheduled on or before ``on_date``, not yet completed, not yet reminded,
+    with reminders enabled, on a plan that is still active.
+
+    The ``reminder_sent_at`` filter is what makes the caller idempotent: once a
+    reminder goes out the row drops out of this queryset, so running the
+    command twice in a day does not send twice.
+
+    Scheduled *on or before* rather than exactly on, deliberately -- if the
+    scheduler misses a day, yesterday's reminders still go out rather than
+    being silently skipped forever.
+    """
+    on_date = _coerce_date(on_date) or timezone.localdate()
+    return (
+        PIPFollowUp.objects.filter(
+            scheduled_date__lte=on_date,
+            completed_at__isnull=True,
+            reminder_sent_at__isnull=True,
+            reminder_enabled=True,
+            pip_plan__state=enums.PIPState.ACTIVE,
+        )
+        .select_related("pip_plan__employee", "pip_plan__resolution__complaint")
+        .order_by("scheduled_date")
+    )
+
+
+def send_follow_up_reminder(follow_up: PIPFollowUp, *, now=None) -> bool:
+    """Send one reminder and stamp it.
+
+    Returns True if a reminder went out. Stamps ``reminder_sent_at`` in the
+    same transaction as the send, so a crash between the two cannot produce a
+    reminder that is sent but not recorded -- which would send again tomorrow.
+    """
+    now = now or timezone.now()
+    plan = follow_up.pip_plan
+    complaint = plan.resolution.complaint
+
+    with transaction.atomic():
+        locked = PIPFollowUp.objects.select_for_update().get(pk=follow_up.pk)
+        # Re-check under the lock: two workers may have picked the same row.
+        if locked.reminder_sent_at is not None or locked.completed_at is not None:
+            return False
+
+        locked.reminder_sent_at = now
+        locked.save(update_fields=["reminder_sent_at"])
+
+        notifications.notify(
+            notifications.PIP_FOLLOW_UP_DUE,
+            complaint,
+            _hr_recipients(complaint),
+            reference=complaint.reference,
+            employee=plan.employee.full_name,
+            scheduled_date=str(locked.scheduled_date),
+        )
+    return True
