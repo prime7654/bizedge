@@ -13,7 +13,7 @@ precisely the kind of conditional that leaks after a refactor.
 from __future__ import annotations
 
 from django.utils.translation import gettext_lazy as _
-from drf_spectacular.utils import extend_schema
+from drf_spectacular.utils import OpenApiParameter, extend_schema
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
@@ -162,6 +162,14 @@ class InvestigationViewSet(viewsets.GenericViewSet):
         )
 
     @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "collaborator_id",
+                str,
+                OpenApiParameter.PATH,
+                description="Collaborator id on this investigation.",
+            )
+        ],
         responses={204: None},
         description=(
             "Remove someone from the investigation. Soft: their answers stay on "
@@ -188,6 +196,14 @@ class InvestigationViewSet(viewsets.GenericViewSet):
     # -- information requests ---------------------------------------------
 
     @extend_schema(
+        parameters=[
+            OpenApiParameter(
+                "collaborator_id",
+                str,
+                OpenApiParameter.PATH,
+                description="Collaborator id on this investigation.",
+            )
+        ],
         request=RequestInformationSerializer,
         responses={201: InformationRequestSerializer},
         description=(

@@ -605,6 +605,7 @@ paths:
         name: collaborator_id
         schema:
           type: string
+        description: Collaborator id on this investigation.
         required: true
       - in: path
         name: id
@@ -630,6 +631,7 @@ paths:
         name: collaborator_id
         schema:
           type: string
+        description: Collaborator id on this investigation.
         required: true
       - in: path
         name: id
@@ -1612,7 +1614,7 @@ components:
           readOnly: true
         state:
           allOf:
-          - $ref: '#/components/schemas/StateB9fEnum'
+          - $ref: '#/components/schemas/InvestigationStateEnum'
           readOnly: true
         report_submitted_at:
           type: string
@@ -1660,7 +1662,7 @@ components:
           readOnly: true
         state:
           allOf:
-          - $ref: '#/components/schemas/StateB9fEnum'
+          - $ref: '#/components/schemas/InvestigationStateEnum'
           readOnly: true
         report_submitted_at:
           type: string
@@ -1745,6 +1747,16 @@ components:
           minLength: 1
       required:
       - body
+    InvestigationStateEnum:
+      enum:
+      - DRAFT
+      - IN_PROGRESS
+      - REPORT_SUBMITTED
+      type: string
+      description: |-
+        * `DRAFT` - Draft
+        * `IN_PROGRESS` - In progress
+        * `REPORT_SUBMITTED` - Report submitted
     InviteCollaboratorRequest:
       type: object
       properties:
@@ -1884,7 +1896,7 @@ components:
           readOnly: true
         state:
           allOf:
-          - $ref: '#/components/schemas/PIPPlanStateEnum'
+          - $ref: '#/components/schemas/PIPStateEnum'
           readOnly: true
         trainings:
           type: array
@@ -1905,7 +1917,7 @@ components:
       - start_date
       - state
       - trainings
-    PIPPlanStateEnum:
+    PIPStateEnum:
       enum:
       - ACTIVE
       - COMPLETED
@@ -2196,16 +2208,6 @@ components:
         * `SELF` - Filed by the employee
         * `HR_FOR_EMPLOYEE` - Filed by HR on behalf of an employee
         * `HR_FOR_COMPANY` - Filed by HR on behalf of the company
-    StateB9fEnum:
-      enum:
-      - DRAFT
-      - IN_PROGRESS
-      - REPORT_SUBMITTED
-      type: string
-      description: |-
-        * `DRAFT` - Draft
-        * `IN_PROGRESS` - In progress
-        * `REPORT_SUBMITTED` - Report submitted
     StatusEnum:
       enum:
       - PENDING

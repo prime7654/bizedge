@@ -154,6 +154,9 @@ SPECTACULAR_SETTINGS = {
     "ENUM_NAME_OVERRIDES": {
         "VisibilityEnum": "apps.grievances.enums.Visibility.choices",
         "ComplaintStateEnum": "apps.grievances.enums.ComplaintState.choices",
+        "InvestigationStateEnum": "apps.grievances.enums.InvestigationState.choices",
+        "PIPStateEnum": "apps.grievances.enums.PIPState.choices",
+        "CollaboratorStatusEnum": "apps.grievances.enums.CollaboratorStatus.choices",
     },
     "COMPONENT_SPLIT_REQUEST": True,
 }
