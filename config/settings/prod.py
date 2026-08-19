@@ -29,6 +29,10 @@ if not ALLOWED_HOSTS:
 # Django requires the scheme here, unlike ALLOWED_HOSTS. Without it the admin
 # login and any session-authenticated POST fail CSRF verification over HTTPS.
 CSRF_TRUSTED_ORIGINS = [f"https://{host}" for host in ALLOWED_HOSTS if host != "*"]
+# The frontend posts from a different site (Vercel), so its origin must be a
+# trusted CSRF origin too -- CSRF checks the request's Origin, which is the
+# frontend, not this API's host. Reuse the CORS allow-list from base settings.
+CSRF_TRUSTED_ORIGINS += [o for o in CORS_ALLOWED_ORIGINS if o.startswith("https://")]
 
 # The platform terminates TLS and forwards over HTTP, so Django needs telling
 # the original request was secure -- otherwise SECURE_SSL_REDIRECT loops.
@@ -37,6 +41,12 @@ SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = True
 SESSION_COOKIE_SECURE = True
 CSRF_COOKIE_SECURE = True
+# The frontend and API are on different sites (vercel.app vs onrender.com), so
+# the session and CSRF cookies must be SameSite=None to be sent on cross-site
+# requests at all. None requires Secure, set just above. Without this, CORS is
+# configured correctly and the browser still never sends the session cookie.
+SESSION_COOKIE_SAMESITE = "None"
+CSRF_COOKIE_SAMESITE = "None"
 SECURE_HSTS_SECONDS = 31536000
 SECURE_HSTS_INCLUDE_SUBDOMAINS = True
 SECURE_HSTS_PRELOAD = True

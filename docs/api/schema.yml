@@ -4,6 +4,76 @@ info:
   version: 1.0.0
   description: Complaints, investigations and resolutions.
 paths:
+  /api/v1/auth/me/:
+    get:
+      operationId: v1_auth_me_retrieve
+      description: Who am I? Resolves the Employee profile behind the JWT.
+      tags:
+      - v1
+      security:
+      - jwtAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Me'
+          description: ''
+  /api/v1/auth/token/:
+    post:
+      operationId: v1_auth_token_create
+      description: |-
+        Takes a set of user credentials and returns an access and refresh JSON web
+        token pair to prove the authentication of those credentials.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenObtainPairRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenObtainPair'
+          description: ''
+  /api/v1/auth/token/refresh/:
+    post:
+      operationId: v1_auth_token_refresh_create
+      description: |-
+        Takes a refresh type JSON web token and returns an access type JSON web
+        token if the refresh token is valid.
+      tags:
+      - v1
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/TokenRefreshRequest'
+        required: true
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenRefresh'
+          description: ''
   /api/v1/complaints/:
     get:
       operationId: v1_complaints_list
@@ -143,6 +213,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -171,6 +242,7 @@ paths:
               $ref: '#/components/schemas/ComplaintCreateRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -194,6 +266,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -218,6 +291,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '204':
@@ -252,6 +326,7 @@ paths:
               $ref: '#/components/schemas/AppointInvestigatorRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -284,6 +359,7 @@ paths:
                   type: string
                   format: binary
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -307,6 +383,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -346,6 +423,7 @@ paths:
               $ref: '#/components/schemas/ReopenComplaintRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -383,6 +461,7 @@ paths:
               $ref: '#/components/schemas/ResolveComplaintRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -406,6 +485,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -431,6 +511,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -471,6 +552,7 @@ paths:
             schema:
               $ref: '#/components/schemas/WithdrawComplaintRequest'
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -487,6 +569,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -503,6 +586,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -538,6 +622,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -561,6 +646,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -595,6 +681,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -618,6 +705,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -646,6 +734,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -681,6 +770,7 @@ paths:
               $ref: '#/components/schemas/InviteCollaboratorRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -712,6 +802,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '204':
@@ -750,6 +841,7 @@ paths:
               $ref: '#/components/schemas/RequestInformationRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -786,6 +878,7 @@ paths:
               $ref: '#/components/schemas/RecordMeetingRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -826,6 +919,7 @@ paths:
               $ref: '#/components/schemas/InvestigationNoteRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -850,6 +944,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -890,6 +985,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -925,6 +1021,7 @@ paths:
               $ref: '#/components/schemas/RespondToRequestRequest'
         required: true
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '201':
@@ -960,6 +1057,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -983,6 +1081,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -1024,6 +1123,7 @@ paths:
             schema:
               $ref: '#/components/schemas/CompleteFollowUpRequest'
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -1058,6 +1158,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -1081,6 +1182,7 @@ paths:
       tags:
       - v1
       security:
+      - jwtAuth: []
       - cookieAuth: []
       responses:
         '200':
@@ -1976,6 +2078,39 @@ components:
       description: |-
         * `TWO_WEEK_CHECKIN` - Two week check-in
         * `CUSTOM` - Custom
+    Me:
+      type: object
+      description: The signed-in employee, for the frontend to render who/role.
+      properties:
+        id:
+          type: string
+          format: uuid
+          readOnly: true
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+        job_title:
+          type: string
+          readOnly: true
+        is_hr:
+          type: boolean
+          readOnly: true
+          description: HR users see every complaint filed to HR across the organisation.
+        department:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - department
+      - email
+      - full_name
+      - id
+      - is_hr
+      - job_title
     Meeting:
       type: object
       properties:
@@ -2461,6 +2596,49 @@ components:
       description: |-
         * `GENERAL` - General grievance
         * `EMPLOYEE` - About an employee
+    TokenObtainPair:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+        refresh:
+          type: string
+          readOnly: true
+      required:
+      - access
+      - refresh
+    TokenObtainPairRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          writeOnly: true
+          minLength: 1
+        password:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - password
+      - username
+    TokenRefresh:
+      type: object
+      properties:
+        access:
+          type: string
+          readOnly: true
+      required:
+      - access
+    TokenRefreshRequest:
+      type: object
+      properties:
+        refresh:
+          type: string
+          writeOnly: true
+          minLength: 1
+      required:
+      - refresh
     Training:
       type: object
       properties:
@@ -2572,3 +2750,7 @@ components:
       type: apiKey
       in: cookie
       name: sessionid
+    jwtAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

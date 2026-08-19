@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "django_filters",
     "drf_spectacular",
+    "corsheaders",
     # Local
     "apps.core",
     "apps.directory",
@@ -34,6 +35,10 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    # CORS must sit as high as possible, and specifically before any middleware
+    # that can emit a response (WhiteNoise, CommonMiddleware) -- otherwise those
+    # responses go out without the Access-Control-* headers the browser needs.
+    "corsheaders.middleware.CorsMiddleware",
     # Serves static files in deployment. Without it /admin/ and /api/docs/
     # render unstyled, because nothing else is serving them.
     "whitenoise.middleware.WhiteNoiseMiddleware",
@@ -149,6 +154,9 @@ GRIEVANCES_ALLOWED_ATTACHMENT_TYPES = [
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
+        # Bearer JWT for the SPA frontends: cross-origin, no cookies or CSRF.
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        # Retained for the DRF browsable API and Django admin.
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
@@ -162,6 +170,16 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 25,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
+}
+
+# JWT tuning. A short-lived access token the SPA refreshes silently, and a
+# longer refresh token. Longer than simplejwt's 5-minute default so the frontend
+# is not refreshing on nearly every interaction.
+from datetime import timedelta  # noqa: E402
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
 }
 
 SPECTACULAR_SETTINGS = {
@@ -182,7 +200,38 @@ SPECTACULAR_SETTINGS = {
         "CollaboratorStatusEnum": "apps.grievances.enums.CollaboratorStatus.choices",
     },
     "COMPONENT_SPLIT_REQUEST": True,
+    # Keep the MAKAY employee-app surface (/api/v1/app/) out of the generated
+    # schema: it is a plain-APIView compatibility layer with its own frontend
+    # contract, so including it only adds spectacular warnings and noise.
+    "PREPROCESSING_HOOKS": [
+        "apps.grievances.app_api.schema.exclude_app_api_endpoints",
+    ],
 }
+
+# ---------------------------------------------------------------------------
+# CORS -- browser access from the MAKAY / Bizedge frontends
+#
+# The API is session-cookie authenticated, so cross-origin calls must send the
+# session and CSRF cookies. That means an explicit, credentialed origin
+# allow-list (a wildcard is not permitted with credentials) plus, in
+# production, cross-site cookie settings -- see config/settings/prod.py.
+#
+# Origins are scheme + host (+ port), never a trailing slash or path. Set the
+# real frontend domain(s) via the CORS_ALLOWED_ORIGINS env var per environment;
+# the defaults cover local Vite dev and the current Vercel deployment.
+# ---------------------------------------------------------------------------
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS",
+    default=[
+        "https://griviances-bizedge.vercel.app",  # production frontend (Vercel)
+        "http://localhost:5173",                   # local dev (Vite)
+        "http://127.0.0.1:5173",
+    ],
+)
+# Required for the browser to send the session + CSRF cookies on cross-origin
+# requests. django-cors-headers' default allowed request headers already include
+# `x-csrftoken`, so the frontend can send the CSRF token without extra config.
+CORS_ALLOW_CREDENTIALS = True
 
 CELERY_BROKER_URL = env("REDIS_URL", default="redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = CELERY_BROKER_URL
