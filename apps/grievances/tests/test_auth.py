@@ -96,3 +96,11 @@ def test_token_without_employee_profile_is_gated_at_the_api():
 
 def test_no_token_is_refused():
     assert APIClient().get(ME_URL).status_code in (401, 403)
+
+
+def test_token_endpoint_trailing_slash_optional():
+    """`/auth/token` and `/auth/token/` both work (no APPEND_SLASH 404 on POST)."""
+    username, _ = make_login(make_org(), "Bob")
+    body = {"username": username, "password": PASSWORD}
+    assert APIClient().post("/api/v1/auth/token", body, format="json").status_code == 200
+    assert APIClient().post("/api/v1/auth/token/", body, format="json").status_code == 200

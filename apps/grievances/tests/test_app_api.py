@@ -328,3 +328,18 @@ def test_detail_404_for_someone_with_no_access(cast):
 
 def test_anonymous_access_is_refused(cast):
     assert APIClient().get(f"{BASE}/complaints?view=reported_by_me").status_code in (401, 403)
+
+
+def test_trailing_slash_is_optional(cast):
+    """Both `/employees` and `/employees/` resolve.
+
+    The spec omits the trailing slash; the rest of the API uses one. Accepting
+    both is what stops a stray slash in the frontend turning into a 404.
+    """
+    c = as_user(cast["bob"])
+    assert c.get(f"{BASE}/employees").status_code == 200
+    assert c.get(f"{BASE}/employees/").status_code == 200
+    assert c.get(f"{BASE}/departments").status_code == 200
+    assert c.get(f"{BASE}/departments/").status_code == 200
+    assert c.get(f"{BASE}/complaints/types?category=general").status_code == 200
+    assert c.get(f"{BASE}/complaints/types/?category=general").status_code == 200
